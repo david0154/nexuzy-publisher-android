@@ -1,104 +1,56 @@
 # Nexuzy Publisher Android
 
-Android version of **Nexuzy Publisher** (inspired by `david0154/nexuzy-publisher-desk`) for RSS-based AI news drafting and WordPress publishing.
+Android app for AI-assisted RSS news workflow: fetch feed → verify facts → rewrite article → grammar clean-up → save local draft → push WordPress draft.
 
-## What this app now supports
+## Maintainer
+- Developer: **David**
+- Organization: **Nexuzy Lab**
+- Support: **nexuzylab@gmail.com**
+- Android Repo: https://github.com/david0154/nexuzy-publisher-android
+- Desktop Reference: https://github.com/david0154/nexuzy-publisher-desk
 
-- RSS feed parsing and article source collection.
-- AI content flow:
-  - Gemini (up to 3 API keys) for writing/rewrite + SEO metadata.
-  - OpenAI (up to 3 API keys) for fact-checking.
-  - Sarvam (1 API key) for grammar cleanup.
-- Save generated articles in **local Room DB as draft**.
-- Push articles to WordPress as **draft**.
-- Optional WordPress ad code injection into post content.
-- Firebase user data model for:
-  - Google login identity.
-  - Per-user RSS link list in Firestore (add/delete/list).
-  - User profile metadata in Firestore.
+## Working flow
+1. Add RSS feed links.
+2. Tap **Fetch News**.
+3. Parse RSS + extract article image.
+4. Verify facts + confidence with OpenAI.
+5. Rewrite title/article with Gemini.
+6. Grammar clean-up with Sarvam.
+7. Save in local Room DB as `draft`.
+8. Push to WordPress as `draft` by category.
 
----
+Workflow entrypoint:
+- `NewsWorkflowManager.fetchVerifyWriteSaveAndPushDraft(...)`
 
-## Project structure (high level)
+## API keys supported
+- Gemini API 1/2/3
+- OpenAI API 1/2/3
+- Sarvam API 1
+- Perplexity API 1/2/3
+- Replit API 1/2/3
+- Maps API (optional)
+- Weather API (optional)
 
-- `app/src/main/java/com/nexuzy/publisher/ai/` → AI pipeline.
-- `app/src/main/java/com/nexuzy/publisher/network/` → RSS + AI provider + WordPress clients.
-- `app/src/main/java/com/nexuzy/publisher/data/db/` → Room database.
-- `app/src/main/java/com/nexuzy/publisher/data/firebase/` → Firestore repository for user profile/RSS links.
-- `app/src/main/java/com/nexuzy/publisher/auth/` → Google sign-in helper.
+## Project docs
+- `SETUP.md` - setup steps and provider checklist.
+- `PRIVACY.md` - privacy policy.
+- `LICENSE` - custom usage terms.
 
----
+## License summary
+Free for use, modification requires explicit permission, rights reserved by David and Nexuzy Lab. Contributors are welcome via pull requests.
 
-## API keys configuration
 
-### Gemini API (3 keys rotation)
-- API 1
-- API 2
-- API 3
+## WordPress draft payload includes
+- Rewritten title
+- Full article body
+- Featured image upload (`featured_media`)
+- Tags + category
+- SEO meta: focus keyword, meta description, keywords (Yoast + RankMath compatible fields)
 
-### OpenAI API (3 keys rotation)
-- API 1
-- API 2
-- API 3
 
-### Sarvam API (single key)
-- API 1 (fixed single key)
-
-### WordPress credentials
-- Site URL
-- Username
-- Application Password
-- Optional Ads Code snippet
-
----
-
-## Firebase setup (Google login + user RSS links)
-
-1. Create Firebase project.
-2. Add Android app package: `com.nexuzy.publisher`.
-3. Enable **Authentication > Google**.
-4. Enable **Cloud Firestore**.
-5. Download `google-services.json` and place it in `app/google-services.json`.
-6. Use your Firebase Web client ID in app settings for Google sign-in flow.
-
-Recommended Firestore collections used by code:
-- `users/{uid}` (profile)
-- `users/{uid}/rss_links/{rssId}` (RSS sources only)
-
-> News/article bodies are intentionally not stored in Firestore by this integration layer.
-
----
-
-## WordPress setup
-
-1. Open WordPress admin.
-2. Create Application Password for your account.
-3. Use site URL + username + app password in app settings.
-4. The app pushes content to `/wp-json/wp/v2/posts` as `draft`.
-
----
-
-## Build setup
-
-- Android Studio Iguana+ (or compatible AGP 8.2+)
-- JDK 17 recommended
-- Kotlin 1.9+
-- Min SDK 26
-
-### Gradle plugins/dependencies included
-- Android + Kotlin + KSP
-- Firebase Google Services plugin
-- Firebase Auth + Firestore
-- Play Services Auth
-- Room, OkHttp, Gson, Jsoup, Coroutines
-
----
-
-## Notes
-
-- This repository currently has code-first implementation in several areas and may require matching XML/resources if missing in your branch.
-- If you want, I can next add complete UI screens for:
-  - Google login button flow
-  - RSS add/delete list synced with Firestore
-  - WordPress ads code field in Settings UI
-  - One-tap “Generate + Save Draft + Push Draft to WP” pipeline action
+## Merge conflict note
+If GitHub still reports conflicts, sync latest target branch into this branch and keep the versions of:
+- `README.md`
+- `app/src/main/java/com/nexuzy/publisher/data/prefs/ApiKeyManager.kt`
+- `app/src/main/java/com/nexuzy/publisher/data/prefs/AppPreferences.kt`
+from this branch.

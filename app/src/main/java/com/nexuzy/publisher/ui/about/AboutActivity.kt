@@ -20,33 +20,41 @@ class AboutActivity : AppCompatActivity() {
         supportActionBar?.title = "About"
 
         binding.apply {
-            // App version
             tvAppVersion.text = getString(R.string.app_version)
-
-            // Developer info
             tvDeveloperName.text = getString(R.string.developer_name)
             tvDeveloperCompany.text = getString(R.string.developer_company)
             tvDeveloperLocation.text = getString(R.string.developer_location)
 
-            // GitHub repo button
+            // Existing button slots reused for important project links
+            btnGithubRepo.text = getString(R.string.opensource_label)
+            btnDesktopVersion.text = getString(R.string.support_label)
+            btnWebsite.text = getString(R.string.privacy_policy_label)
+
             btnGithubRepo.setOnClickListener {
                 openUrl(getString(R.string.github_url))
             }
 
-            // Desktop version link
             btnDesktopVersion.setOnClickListener {
-                openUrl(getString(R.string.desktop_url))
+                openMail(getString(R.string.support_email))
             }
 
-            // Website link
             btnWebsite.setOnClickListener {
-                openUrl(getString(R.string.website_url))
+                openUrl(getString(R.string.privacy_policy_url))
             }
         }
     }
 
     private fun openUrl(url: String) {
         startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }
+
+    private fun openMail(email: String) {
+        val intent = Intent(Intent.ACTION_SENDTO).apply {
+            data = Uri.parse("mailto:$email")
+            putExtra(Intent.EXTRA_EMAIL, arrayOf(email))
+            putExtra(Intent.EXTRA_SUBJECT, "Nexuzy Publisher Android Support")
+        }
+        startActivity(intent)
     }
 
     override fun onSupportNavigateUp(): Boolean {

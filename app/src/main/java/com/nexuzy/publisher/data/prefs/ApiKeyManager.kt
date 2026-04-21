@@ -6,6 +6,8 @@ import androidx.core.content.edit
 
 /**
  * Manages API keys and integration settings.
+ *
+ * Keep provider groups stable/append-only to stay merge-friendly across branches.
  */
 class ApiKeyManager(context: Context) {
 
@@ -23,14 +25,37 @@ class ApiKeyManager(context: Context) {
     fun setSarvamKey(key: String) = prefs.edit { putString("sarvam_key", key) }
     fun getSarvamKey(): String = prefs.getString("sarvam_key", "") ?: ""
 
+    fun setPerplexityKey(index: Int, key: String) = prefs.edit { putString("perplexity_key_$index", key) }
+    fun getPerplexityKey(index: Int): String = prefs.getString("perplexity_key_$index", "") ?: ""
+    fun getPerplexityKeys(): List<String> = (1..3).map { getPerplexityKey(it) }.filter { it.isNotBlank() }
+
+    fun setReplitKey(index: Int, key: String) = prefs.edit { putString("replit_key_$index", key) }
+    fun getReplitKey(index: Int): String = prefs.getString("replit_key_$index", "") ?: ""
+    fun getReplitKeys(): List<String> = (1..3).map { getReplitKey(it) }.filter { it.isNotBlank() }
+
+    fun setMapsApiKey(key: String) = prefs.edit { putString("maps_api_key", key) }
+    fun getMapsApiKey(): String = prefs.getString("maps_api_key", "") ?: ""
+
+    fun setWeatherApiKey(key: String) = prefs.edit { putString("weather_api_key", key) }
+    fun getWeatherApiKey(): String = prefs.getString("weather_api_key", "") ?: ""
+
+    /** Generic helpers to avoid merge conflicts when adding future providers. */
+    fun setProviderKey(provider: String, index: Int, key: String) =
+        prefs.edit { putString("${provider.lowercase()}_key_$index", key) }
+
+    fun getProviderKey(provider: String, index: Int): String =
+        prefs.getString("${provider.lowercase()}_key_$index", "") ?: ""
+
+    fun getProviderKeys(provider: String, maxKeys: Int = 3): List<String> =
+        (1..maxKeys).map { getProviderKey(provider, it) }.filter { it.isNotBlank() }
+
     private fun getCurrentGeminiIndex(): Int = prefs.getInt("gemini_current_index", 0)
     private fun getCurrentOpenAiIndex(): Int = prefs.getInt("openai_current_index", 0)
 
     fun getActiveGeminiKey(): String? {
         val keys = getGeminiKeys()
         if (keys.isEmpty()) return null
-        val index = getCurrentGeminiIndex() % keys.size
-        return keys[index]
+        return keys[getCurrentGeminiIndex() % keys.size]
     }
 
     fun rotateGeminiKey(): String? {
@@ -45,8 +70,7 @@ class ApiKeyManager(context: Context) {
     fun getActiveOpenAiKey(): String? {
         val keys = getOpenAiKeys()
         if (keys.isEmpty()) return null
-        val index = getCurrentOpenAiIndex() % keys.size
-        return keys[index]
+        return keys[getCurrentOpenAiIndex() % keys.size]
     }
 
     fun rotateOpenAiKey(): String? {
