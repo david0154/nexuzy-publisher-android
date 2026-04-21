@@ -6,6 +6,8 @@ import androidx.core.content.edit
 
 /**
  * Manages API keys and integration settings.
+ *
+ * Keep provider groups stable/append-only to stay merge-friendly across branches.
  */
 class ApiKeyManager(context: Context) {
 

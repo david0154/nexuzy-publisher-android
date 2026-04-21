@@ -85,7 +85,7 @@ class NewsWorkflowManager(private val context: Context) {
                     savedDraftCount += 1
 
                     if (activeWpSite != null) {
-                        val publish = wpClient.pushDraft(activeWpSite, pipelineResult.article, adsCode)
+                        val publish = wpClient.pushNewsDraftWithSeo(activeWpSite, pipelineResult.article, adsCode)
                         if (publish.success) {
                             pushedDraftCount += 1
                             db.articleDao().update(

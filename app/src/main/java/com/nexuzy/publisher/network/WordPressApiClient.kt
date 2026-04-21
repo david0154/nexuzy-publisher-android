@@ -79,20 +79,19 @@ class WordPressApiClient {
                 }
                 if (featuredMediaId > 0) addProperty("featured_media", featuredMediaId)
 
-                // Yoast SEO meta fields
-                val yoast = JsonObject().apply {
-                    addProperty("wpseo_title", article.title)
-                    addProperty("wpseo_metadesc", article.metaDescription)
-                    addProperty("wpseo_focuskw", article.focusKeyphrase)
-                }
-                add("yoast_head_json", yoast)
-
-                // Meta fields for RankMath / generic SEO
+                // SEO meta fields for Yoast + RankMath + generic plugins
                 val meta = JsonObject().apply {
-                    addProperty("rank_math_focus_keyword", article.focusKeyphrase)
-                    addProperty("rank_math_description", article.metaDescription)
+                    // Yoast keys
+                    addProperty("_yoast_wpseo_title", article.title)
                     addProperty("_yoast_wpseo_focuskw", article.focusKeyphrase)
                     addProperty("_yoast_wpseo_metadesc", article.metaDescription)
+
+                    // RankMath keys
+                    addProperty("rank_math_title", article.title)
+                    addProperty("rank_math_focus_keyword", article.focusKeyphrase)
+                    addProperty("rank_math_description", article.metaDescription)
+
+                    // Generic fallback keywords for custom themes/plugins
                     addProperty("nexuzy_meta_keywords", article.metaKeywords)
                 }
                 add("meta", meta)
@@ -238,6 +237,14 @@ class WordPressApiClient {
 
 
     suspend fun pushDraft(site: WordPressSite, article: Article, adsCode: String = ""): PublishResult {
+        return publishPost(site = site, article = article, status = "draft", adsCode = adsCode)
+    }
+
+
+    /**
+     * Convenience method for pushing a full SEO-ready draft with title, image, tags and SEO meta.
+     */
+    suspend fun pushNewsDraftWithSeo(site: WordPressSite, article: Article, adsCode: String = ""): PublishResult {
         return publishPost(site = site, article = article, status = "draft", adsCode = adsCode)
     }
 

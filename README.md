@@ -38,3 +38,19 @@ Workflow entrypoint:
 
 ## License summary
 Free for use, modification requires explicit permission, rights reserved by David and Nexuzy Lab. Contributors are welcome via pull requests.
+
+
+## WordPress draft payload includes
+- Rewritten title
+- Full article body
+- Featured image upload (`featured_media`)
+- Tags + category
+- SEO meta: focus keyword, meta description, keywords (Yoast + RankMath compatible fields)
+
+
+## Merge conflict note
+If GitHub still reports conflicts, sync latest target branch into this branch and keep the versions of:
+- `README.md`
+- `app/src/main/java/com/nexuzy/publisher/data/prefs/ApiKeyManager.kt`
+- `app/src/main/java/com/nexuzy/publisher/data/prefs/AppPreferences.kt`
+from this branch.
