@@ -26,10 +26,6 @@
     <string name="settings_openai_title">OpenAI API Keys</string>
     <string name="settings_sarvam_title">Sarvam AI API Key</string>
     <string name="settings_wordpress_title">WordPress Site</string>
-    <string name="settings_perplexity_title">Perplexity API Keys</string>
-    <string name="settings_replit_title">Replit API Keys</string>
-    <string name="settings_maps_title">Maps API Key</string>
-    <string name="settings_weather_title">Weather API Key</string>
     <string name="settings_wp_ads_code">WordPress Ads Code</string>
     <string name="api_key_1">API Key 1</string>
     <string name="api_key_2">API Key 2</string>

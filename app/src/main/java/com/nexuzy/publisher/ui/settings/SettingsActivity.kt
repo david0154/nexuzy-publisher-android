@@ -43,14 +43,6 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // Optional fields (only if XML includes them)
-        setOptionalText("etPerplexityKey1", keyManager.getPerplexityKey(1))
-        setOptionalText("etPerplexityKey2", keyManager.getPerplexityKey(2))
-        setOptionalText("etPerplexityKey3", keyManager.getPerplexityKey(3))
-        setOptionalText("etReplitKey1", keyManager.getReplitKey(1))
-        setOptionalText("etReplitKey2", keyManager.getReplitKey(2))
-        setOptionalText("etReplitKey3", keyManager.getReplitKey(3))
-        setOptionalText("etMapsApiKey", keyManager.getMapsApiKey())
-        setOptionalText("etWeatherApiKey", keyManager.getWeatherApiKey())
         setOptionalText("etWpAdsCode", keyManager.getWordPressAdsCode())
     }
 
@@ -73,14 +65,6 @@ class SettingsActivity : AppCompatActivity() {
             }
 
             // Optional fields (only if XML includes them)
-            keyManager.setPerplexityKey(1, getOptionalText("etPerplexityKey1"))
-            keyManager.setPerplexityKey(2, getOptionalText("etPerplexityKey2"))
-            keyManager.setPerplexityKey(3, getOptionalText("etPerplexityKey3"))
-            keyManager.setReplitKey(1, getOptionalText("etReplitKey1"))
-            keyManager.setReplitKey(2, getOptionalText("etReplitKey2"))
-            keyManager.setReplitKey(3, getOptionalText("etReplitKey3"))
-            keyManager.setMapsApiKey(getOptionalText("etMapsApiKey"))
-            keyManager.setWeatherApiKey(getOptionalText("etWeatherApiKey"))
             keyManager.setWordPressAdsCode(getOptionalText("etWpAdsCode"))
 
             keyManager.resetRotation()
