@@ -106,10 +106,7 @@ Workflow entrypoint:
 - Gemini API 1/2/3
 - OpenAI API 1/2/3
 - Sarvam API 1
-- Perplexity API 1/2/3
-- Replit API 1/2/3
-- Maps API (optional)
-- Weather API (optional)
+
 
 ## Project docs
 - `SETUP.md` - setup steps and provider checklist.
@@ -128,9 +125,4 @@ Free for use, modification requires explicit permission, rights reserved by Davi
 - SEO meta: focus keyword, meta description, keywords (Yoast + RankMath compatible fields)
 
 
-## Merge conflict note
-If GitHub still reports conflicts, sync latest target branch into this branch and keep the versions of:
-- `README.md`
-- `app/src/main/java/com/nexuzy/publisher/data/prefs/ApiKeyManager.kt`
-- `app/src/main/java/com/nexuzy/publisher/data/prefs/AppPreferences.kt`
-from this branch.
+
