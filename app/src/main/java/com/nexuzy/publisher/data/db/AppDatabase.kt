@@ -13,7 +13,7 @@ import com.nexuzy.publisher.data.model.WordPressSite
 
 @Database(
     entities = [Article::class, RssFeed::class, WordPressSite::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -31,7 +31,9 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "nexuzy_publisher_db"
-                ).build()
+                )
+                    .fallbackToDestructiveMigration() // handles schema change from v1 to v2
+                    .build()
                 INSTANCE = instance
                 instance
             }
