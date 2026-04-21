@@ -43,4 +43,8 @@ class AppPreferences(context: Context) {
     var notificationsEnabled: Boolean
         get() = prefs.getBoolean("notifications", true)
         set(value) = prefs.edit { putBoolean("notifications", value) }
+
+    var googleWebClientId: String
+        get() = prefs.getString("google_web_client_id", "") ?: ""
+        set(value) = prefs.edit { putString("google_web_client_id", value) }
 }
