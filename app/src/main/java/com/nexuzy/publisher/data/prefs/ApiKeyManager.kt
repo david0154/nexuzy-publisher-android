@@ -23,6 +23,21 @@ class ApiKeyManager(context: Context) {
     fun setSarvamKey(key: String) = prefs.edit { putString("sarvam_key", key) }
     fun getSarvamKey(): String = prefs.getString("sarvam_key", "") ?: ""
 
+
+    fun setPerplexityKey(index: Int, key: String) = prefs.edit { putString("perplexity_key_$index", key) }
+    fun getPerplexityKey(index: Int): String = prefs.getString("perplexity_key_$index", "") ?: ""
+    fun getPerplexityKeys(): List<String> = (1..3).map { getPerplexityKey(it) }.filter { it.isNotBlank() }
+
+    fun setReplitKey(index: Int, key: String) = prefs.edit { putString("replit_key_$index", key) }
+    fun getReplitKey(index: Int): String = prefs.getString("replit_key_$index", "") ?: ""
+    fun getReplitKeys(): List<String> = (1..3).map { getReplitKey(it) }.filter { it.isNotBlank() }
+
+    fun setMapsApiKey(key: String) = prefs.edit { putString("maps_api_key", key) }
+    fun getMapsApiKey(): String = prefs.getString("maps_api_key", "") ?: ""
+
+    fun setWeatherApiKey(key: String) = prefs.edit { putString("weather_api_key", key) }
+    fun getWeatherApiKey(): String = prefs.getString("weather_api_key", "") ?: ""
+
     private fun getCurrentGeminiIndex(): Int = prefs.getInt("gemini_current_index", 0)
     private fun getCurrentOpenAiIndex(): Int = prefs.getInt("openai_current_index", 0)
 

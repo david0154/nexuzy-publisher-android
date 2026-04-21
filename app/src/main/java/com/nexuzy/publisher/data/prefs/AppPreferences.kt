@@ -47,4 +47,13 @@ class AppPreferences(context: Context) {
     var googleWebClientId: String
         get() = prefs.getString("google_web_client_id", "") ?: ""
         set(value) = prefs.edit { putString("google_web_client_id", value) }
+
+
+    var supportEmail: String
+        get() = prefs.getString("support_email", "nexuzylab@gmail.com") ?: "nexuzylab@gmail.com"
+        set(value) = prefs.edit { putString("support_email", value) }
+
+    var privacyPolicyUrl: String
+        get() = prefs.getString("privacy_policy_url", "https://github.com/david0154/nexuzy-publisher-android") ?: "https://github.com/david0154/nexuzy-publisher-android"
+        set(value) = prefs.edit { putString("privacy_policy_url", value) }
 }
