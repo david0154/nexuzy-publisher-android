@@ -9,10 +9,6 @@
 - Gemini API key 1/2/3
 - OpenAI API key 1/2/3
 - Sarvam API key
-- Perplexity API key 1/2/3 (optional)
-- Replit API key 1/2/3 (optional)
-- Maps API key (optional)
-- Weather API key (optional)
 
 ## 3) WordPress setup
 - WordPress site URL

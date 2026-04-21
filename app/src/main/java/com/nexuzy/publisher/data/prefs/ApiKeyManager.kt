@@ -101,4 +101,5 @@ class ApiKeyManager(context: Context) {
 
     fun setWordPressAdsCode(code: String) = prefs.edit { putString("wp_ads_code", code) }
     fun getWordPressAdsCode(): String = prefs.getString("wp_ads_code", "") ?: ""
+
 }
