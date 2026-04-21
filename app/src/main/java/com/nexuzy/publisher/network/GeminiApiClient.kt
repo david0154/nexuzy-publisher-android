@@ -1,7 +1,7 @@
 package com.nexuzy.publisher.network
 
 import android.util.Log
-import com.google.gson.JsonObject
+import com.google.gson.JsonPrimitive
 import com.google.gson.JsonParser
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
 import okhttp3.MediaType.Companion.toMediaType
@@ -12,15 +12,16 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Gemini API client.
- * - Writes news articles based on RSS item facts.
- * - Supports up to 3 API keys with automatic rotation when quota is exceeded.
- * - OpenAI is used as a separate fact-checker — NOT as a writing fallback.
+ * Role 1: Write news articles from RSS item facts.
+ * Role 2: Generate SEO data (tags, keywords, focus keyphrase, meta description).
+ * Supports up to 3 API keys with automatic rotation — no quota token is wasted.
+ * OpenAI is NEVER used for writing — only for fact-checking.
  */
 class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
         .build()
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
@@ -33,10 +34,19 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         val keyUsed: Int = 1
     )
 
-    /**
-     * Write a news article using Gemini AI.
-     * Automatically rotates keys if quota/rate limit hit.
-     */
+    data class SeoData(
+        val success: Boolean,
+        val tags: List<String> = emptyList(),           // e.g. ["AI", "Technology", "India"]
+        val metaKeywords: String = "",                  // comma-separated for <meta keywords>
+        val focusKeyphrase: String = "",               // primary Yoast/RankMath keyphrase
+        val metaDescription: String = "",             // 155-char SEO description
+        val error: String = ""
+    )
+
+    // ─────────────────────────────────────────────
+    // ROLE 1: Write news article
+    // ─────────────────────────────────────────────
+
     suspend fun writeNewsArticle(
         rssTitle: String,
         rssDescription: String,
@@ -48,44 +58,66 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         if (keys.isEmpty()) {
             return GeminiResult(false, "", "No Gemini API keys configured. Please add in Settings.")
         }
-
         val prompt = buildArticlePrompt(rssTitle, rssDescription, category, maxWords)
-
-        // Try each key in sequence — no quota token wasted
         for ((index, key) in keys.withIndex()) {
-            val result = callGeminiApi(key, model, prompt)
-            if (result.success) {
-                return result.copy(keyUsed = index + 1)
-            }
+            val result = callGemini(key, model, prompt)
+            if (result.success) return result.copy(keyUsed = index + 1)
             if (isQuotaError(result.error)) {
-                Log.w("GeminiClient", "Key ${index + 1} quota exceeded, trying next key")
+                Log.w("GeminiClient", "Key ${index + 1} quota exceeded, trying next")
                 keyManager.rotateGeminiKey()
                 continue
             }
-            // Non-quota error — return immediately
             return result
         }
-        return GeminiResult(false, "", "All Gemini API keys have exceeded their quota. Please try again later.")
+        return GeminiResult(false, "", "All Gemini API keys have exceeded quota. Try again later.")
     }
 
-    private fun callGeminiApi(apiKey: String, model: String, prompt: String): GeminiResult {
+    // ─────────────────────────────────────────────
+    // ROLE 2: Generate SEO data from article
+    // ─────────────────────────────────────────────
+
+    suspend fun generateSeoData(
+        title: String,
+        articleContent: String,
+        category: String,
+        model: String = "gemini-1.5-flash"
+    ): SeoData {
+        val keys = keyManager.getGeminiKeys()
+        if (keys.isEmpty()) return SeoData(false, error = "No Gemini keys configured.")
+
+        val prompt = buildSeoPrompt(title, articleContent, category)
+
+        for ((index, key) in keys.withIndex()) {
+            val result = callGemini(key, model, prompt)
+            if (result.success) {
+                return parseSeoResponse(result.content)
+            }
+            if (isQuotaError(result.error)) {
+                keyManager.rotateGeminiKey()
+                continue
+            }
+            return SeoData(false, error = result.error)
+        }
+        return SeoData(false, error = "All Gemini keys exhausted for SEO generation.")
+    }
+
+    // ─────────────────────────────────────────────
+    // Internal helpers
+    // ─────────────────────────────────────────────
+
+    private fun callGemini(apiKey: String, model: String, prompt: String): GeminiResult {
         return try {
             val requestBody = buildRequestBody(prompt)
             val request = Request.Builder()
                 .url("$baseUrl/$model:generateContent?key=$apiKey")
                 .post(requestBody.toRequestBody(jsonMedia))
                 .build()
-
             val response = client.newCall(request).execute()
             val body = response.body?.string() ?: ""
-
             if (response.isSuccessful) {
-                val content = extractGeminiContent(body)
-                if (content.isNotBlank()) {
-                    GeminiResult(true, content)
-                } else {
-                    GeminiResult(false, "", "Empty response from Gemini")
-                }
+                val content = extractText(body)
+                if (content.isNotBlank()) GeminiResult(true, content)
+                else GeminiResult(false, "", "Empty response from Gemini")
             } else {
                 GeminiResult(false, "", "HTTP ${response.code}: $body")
             }
@@ -94,38 +126,75 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         }
     }
 
-    private fun buildArticlePrompt(title: String, description: String, category: String, maxWords: Int): String {
-        return """
-            You are a professional news journalist. Write a complete, factual, engaging news article based on the following information.
+    private fun buildArticlePrompt(title: String, desc: String, category: String, maxWords: Int) = """
+        You are a professional news journalist. Write a complete, factual, engaging news article.
 
-            Original Headline: $title
-            Summary/Description: $description
-            Category: $category
+        Original Headline: $title
+        Summary/Description: $desc
+        Category: $category
 
-            Requirements:
-            - Write approximately $maxWords words
-            - Start with a strong lead paragraph
-            - Include who, what, when, where, why (5 W's)
-            - Use objective, journalistic tone
-            - Add context and background where appropriate
-            - End with implications or outlook
-            - Do NOT add fake quotes
-            - Only use facts from the provided information
+        Requirements:
+        - Write approximately $maxWords words
+        - Strong lead paragraph (who, what, when, where, why)
+        - Objective journalistic tone
+        - Add context and background
+        - End with implications or outlook
+        - Do NOT add fake quotes
+        - Only use facts from the provided information
 
-            Write the complete article now:
-        """.trimIndent()
+        Write the complete article now:
+    """.trimIndent()
+
+    private fun buildSeoPrompt(title: String, content: String, category: String) = """
+        You are an SEO expert. Analyze this news article and generate SEO metadata.
+
+        Article Title: $title
+        Category: $category
+        Article (first 1000 chars): ${content.take(1000)}
+
+        Generate SEO data and respond ONLY in this exact JSON format:
+        {
+          "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
+          "meta_keywords": "keyword1, keyword2, keyword3, keyword4, keyword5",
+          "focus_keyphrase": "main focus keyphrase here",
+          "meta_description": "Compelling 120-155 character meta description for search engines."
+        }
+
+        Rules:
+        - tags: 5-8 relevant single or two-word tags
+        - meta_keywords: 5-10 comma-separated keywords
+        - focus_keyphrase: 2-4 words, most important search phrase
+        - meta_description: 120-155 characters, compelling and includes focus keyphrase
+        - Respond ONLY with valid JSON, no extra text
+    """.trimIndent()
+
+    private fun parseSeoResponse(raw: String): SeoData {
+        return try {
+            // Strip markdown code fences if present
+            val cleaned = raw.trim()
+                .removePrefix("```json").removePrefix("```")
+                .removeSuffix("```").trim()
+            val json = JsonParser.parseString(cleaned).asJsonObject
+            val tagsArr = json.getAsJsonArray("tags")
+            val tags = (0 until tagsArr.size()).map { tagsArr[it].asString }
+            SeoData(
+                success = true,
+                tags = tags,
+                metaKeywords = json.get("meta_keywords")?.asString ?: tags.joinToString(", "),
+                focusKeyphrase = json.get("focus_keyphrase")?.asString ?: "",
+                metaDescription = json.get("meta_description")?.asString ?: ""
+            )
+        } catch (e: Exception) {
+            Log.e("GeminiClient", "SEO parse error: ${e.message} | raw: $raw")
+            SeoData(false, error = "SEO parse failed: ${e.message}")
+        }
     }
 
     private fun buildRequestBody(prompt: String): String {
+        val escaped = JsonPrimitive(prompt).toString()
         return """
             {
-              "contents": [
-                {
-                  "parts": [
-                    {"text": ${com.google.gson.JsonPrimitive(prompt)}}
-                  ]
-                }
-              ],
+              "contents": [{"parts": [{"text": $escaped}]}],
               "generationConfig": {
                 "temperature": 0.7,
                 "topK": 40,
@@ -140,16 +209,15 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         """.trimIndent()
     }
 
-    private fun extractGeminiContent(responseBody: String): String {
+    private fun extractText(responseBody: String): String {
         return try {
             val json = JsonParser.parseString(responseBody).asJsonObject
             val candidates = json.getAsJsonArray("candidates")
             if (candidates != null && candidates.size() > 0) {
-                val content = candidates[0].asJsonObject
+                candidates[0].asJsonObject
                     .getAsJsonObject("content")
                     .getAsJsonArray("parts")[0]
-                    .asJsonObject.get("text").asString
-                content.trim()
+                    .asJsonObject.get("text").asString.trim()
             } else ""
         } catch (e: Exception) {
             Log.e("GeminiClient", "Parse error: ${e.message}")
@@ -157,9 +225,8 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         }
     }
 
-    private fun isQuotaError(error: String): Boolean {
-        return error.contains("429") || error.contains("quota", ignoreCase = true) ||
-               error.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
-               error.contains("rate limit", ignoreCase = true)
-    }
+    private fun isQuotaError(error: String) =
+        error.contains("429") || error.contains("quota", ignoreCase = true) ||
+        error.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
+        error.contains("rate limit", ignoreCase = true)
 }
