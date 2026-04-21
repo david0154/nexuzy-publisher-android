@@ -43,7 +43,8 @@ class WordPressApiClient {
     suspend fun publishPost(
         site: WordPressSite,
         article: Article,
-        status: String = "draft"
+        status: String = "draft",
+        adsCode: String = ""
     ): PublishResult {
         return try {
             val siteUrl = site.siteUrl.trimEnd('/')
@@ -63,7 +64,7 @@ class WordPressApiClient {
             // Step 4 — Build post body
             val postBody = JsonObject().apply {
                 addProperty("title", article.title)
-                addProperty("content", article.content)
+                addProperty("content", withAdsCode(article.content, adsCode))
                 addProperty("excerpt", article.metaDescription.ifBlank { article.summary })
                 addProperty("status", status)
                 if (categoryId > 0) {
@@ -234,6 +235,16 @@ class WordPressApiClient {
         }
     }
 
+
+
+    suspend fun pushDraft(site: WordPressSite, article: Article, adsCode: String = ""): PublishResult {
+        return publishPost(site = site, article = article, status = "draft", adsCode = adsCode)
+    }
+
+    private fun withAdsCode(content: String, adsCode: String): String {
+        if (adsCode.isBlank()) return content
+        return "$content\n\n$adsCode"
+    }
     /**
      * Test WordPress credentials by calling /users/me
      */
