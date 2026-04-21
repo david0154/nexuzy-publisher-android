@@ -4,24 +4,22 @@ import android.content.Context
 import android.util.Log
 import com.nexuzy.publisher.ai.AiPipeline
 import com.nexuzy.publisher.data.db.AppDatabase
+import com.nexuzy.publisher.data.model.Article
 import com.nexuzy.publisher.data.model.RssItem
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
 import com.nexuzy.publisher.network.RssFeedParser
 import com.nexuzy.publisher.network.WordPressApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneOffset
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
 /**
  * End-to-end workflow for:
- * 1) Fetch RSS from all saved feeds
- * 2) Identify today's top/hot/viral candidates
- * 3) Verify + rewrite through AI pipeline
- * 4) Save local drafts and push WordPress drafts
+ * 1) Fetch RSS
+ * 2) Verify/score with OpenAI (inside AiPipeline)
+ * 3) Generate title/content with Gemini
+ * 4) Clean grammar with Sarvam
+ * 5) Save local draft
+ * 6) Push WordPress draft
  */
 class NewsWorkflowManager(private val context: Context) {
 
@@ -31,207 +29,90 @@ class NewsWorkflowManager(private val context: Context) {
     private val wpClient = WordPressApiClient()
     private val keyManager = ApiKeyManager(context)
 
-    data class ScoredNews(
-        val item: RssItem,
-        val score: Int,
-        val reason: String,
-        val isHot: Boolean,
-        val isPotentialViral: Boolean
-    )
-
-    data class DailyNewsSnapshot(
-        val allToday: List<RssItem> = emptyList(),
-        val topArticles: List<ScoredNews> = emptyList(),
-        val hotNews: List<ScoredNews> = emptyList(),
-        val potentialViral: List<ScoredNews> = emptyList(),
-        val relatedClusters: Map<String, List<RssItem>> = emptyMap()
-    )
-
     data class WorkflowResult(
         val fetchedCount: Int = 0,
         val processedCount: Int = 0,
         val savedDraftCount: Int = 0,
         val pushedDraftCount: Int = 0,
-        val failures: List<String> = emptyList(),
-        val snapshot: DailyNewsSnapshot = DailyNewsSnapshot()
+        val failures: List<String> = emptyList()
     )
 
     suspend fun fetchVerifyWriteSaveAndPushDraft(limitPerFeed: Int = 5): WorkflowResult = withContext(Dispatchers.IO) {
         val failures = mutableListOf<String>()
+        val feeds = db.rssFeedDao().getActiveFeeds()
         val activeWpSite = db.wordPressSiteDao().getActiveSite()
         val adsCode = keyManager.getWordPressAdsCode()
 
-        val allItems = fetchFromAllFeeds(limitPerFeed)
-        if (allItems.isEmpty()) {
-            return@withContext WorkflowResult(failures = listOf("No active RSS feeds configured or no news fetched"))
+        if (feeds.isEmpty()) {
+            return@withContext WorkflowResult(failures = listOf("No active RSS feeds configured"))
         }
 
-        val todayItems = allItems.filter { isTodayNews(it) }
-        val scored = scoreNewsForToday(todayItems)
-        val top = scored.sortedByDescending { it.score }.take(15)
-        val hot = top.filter { it.isHot }
-        val viral = top.filter { it.isPotentialViral }
-        val clusters = findRelatedNewsClusters(todayItems)
-
+        var fetchedCount = 0
         var processedCount = 0
         var savedDraftCount = 0
         var pushedDraftCount = 0
 
-        for (candidate in top) {
-            try {
-                val item = candidate.item
-                if (!isLikelyNews(item)) {
-                    failures.add("Skipped non-news item: ${item.title}")
-                    continue
-                }
-
-                val pipelineResult = aiPipeline.processRssItem(
-                    rssItem = item,
-                    wordpressSiteId = activeWpSite?.id ?: 0
-                )
-
-                if (!pipelineResult.success || pipelineResult.article == null) {
-                    failures.add("Pipeline failed for '${item.title}': ${pipelineResult.error}")
-                    continue
-                }
-
-                processedCount += 1
-                val localArticleId = db.articleDao().insert(pipelineResult.article)
-                savedDraftCount += 1
-
-                if (activeWpSite != null) {
-                    val publish = wpClient.pushNewsDraftWithSeo(activeWpSite, pipelineResult.article, adsCode)
-                    if (publish.success) {
-                        pushedDraftCount += 1
-                        db.articleDao().update(
-                            pipelineResult.article.copy(
-                                id = localArticleId,
-                                wordpressPostId = publish.postId,
-                                status = "draft"
-                            )
-                        )
-                    } else {
-                        failures.add("WordPress draft push failed for '${item.title}': ${publish.error}")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("NewsWorkflow", "Error for top item: ${e.message}")
-                failures.add("Error for top item: ${e.message}")
-            }
-        }
-
-        WorkflowResult(
-            fetchedCount = allItems.size,
-            processedCount = processedCount,
-            savedDraftCount = savedDraftCount,
-            pushedDraftCount = pushedDraftCount,
-            failures = failures,
-            snapshot = DailyNewsSnapshot(
-                allToday = todayItems,
-                topArticles = top,
-                hotNews = hot,
-                potentialViral = viral,
-                relatedClusters = clusters
-            )
-        )
-    }
-
-    suspend fun fetchTodayHotNews(limitPerFeed: Int = 20): DailyNewsSnapshot = withContext(Dispatchers.IO) {
-        val allItems = fetchFromAllFeeds(limitPerFeed)
-        val todayItems = allItems.filter { isTodayNews(it) }
-        val scored = scoreNewsForToday(todayItems).sortedByDescending { it.score }
-        DailyNewsSnapshot(
-            allToday = todayItems,
-            topArticles = scored.take(20),
-            hotNews = scored.filter { it.isHot }.take(10),
-            potentialViral = scored.filter { it.isPotentialViral }.take(10),
-            relatedClusters = findRelatedNewsClusters(todayItems)
-        )
-    }
-
-    private suspend fun fetchFromAllFeeds(limitPerFeed: Int): List<RssItem> {
-        val feeds = db.rssFeedDao().getActiveFeeds()
-        val merged = mutableListOf<RssItem>()
         for (feed in feeds) {
-            val items = rssParser.fetchFeed(
+            val rssItems = rssParser.fetchFeed(
                 feedUrl = feed.url,
                 feedName = feed.name,
                 feedCategory = feed.category,
                 scrapeImages = true
             ).take(limitPerFeed)
-            merged.addAll(items)
+
+            fetchedCount += rssItems.size
+
+            for (item in rssItems) {
+                try {
+                    if (!isLikelyNews(item)) {
+                        failures.add("Skipped non-news item: ${item.title}")
+                        continue
+                    }
+
+                    val pipelineResult = aiPipeline.processRssItem(
+                        rssItem = item,
+                        wordpressSiteId = activeWpSite?.id ?: 0
+                    )
+
+                    if (!pipelineResult.success || pipelineResult.article == null) {
+                        failures.add("Pipeline failed for '${item.title}': ${pipelineResult.error}")
+                        continue
+                    }
+
+                    processedCount += 1
+
+                    val localArticleId = db.articleDao().insert(pipelineResult.article)
+                    savedDraftCount += 1
+
+                    if (activeWpSite != null) {
+                        val publish = wpClient.pushNewsDraftWithSeo(activeWpSite, pipelineResult.article, adsCode)
+                        if (publish.success) {
+                            pushedDraftCount += 1
+                            db.articleDao().update(
+                                pipelineResult.article.copy(
+                                    id = localArticleId,
+                                    wordpressPostId = publish.postId,
+                                    status = "draft"
+                                )
+                            )
+                        } else {
+                            failures.add("WordPress draft push failed for '${item.title}': ${publish.error}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("NewsWorkflow", "Error for item ${item.title}: ${e.message}")
+                    failures.add("Error for '${item.title}': ${e.message}")
+                }
+            }
         }
-        // de-duplicate by link
-        return merged.distinctBy { it.link }
-    }
 
-    private fun scoreNewsForToday(items: List<RssItem>): List<ScoredNews> {
-        return items.map { item ->
-            val text = "${item.title} ${item.description}".lowercase(Locale.getDefault())
-            var score = 0
-            val reasons = mutableListOf<String>()
-
-            if (item.imageUrl.isNotBlank()) {
-                score += 10
-                reasons.add("has image")
-            }
-
-            if (text.length > 180) {
-                score += 10
-                reasons.add("rich details")
-            }
-
-            val hotWords = listOf("breaking", "live", "urgent", "election", "war", "market", "ai", "launch")
-            val hotHits = hotWords.count { text.contains(it) }
-            if (hotHits > 0) {
-                score += hotHits * 8
-                reasons.add("hot keywords x$hotHits")
-            }
-
-            val viralWords = listOf("viral", "shocking", "trend", "celebrity", "record", "millions", "billion")
-            val viralHits = viralWords.count { text.contains(it) }
-            if (viralHits > 0) {
-                score += viralHits * 7
-                reasons.add("viral keywords x$viralHits")
-            }
-
-            if (isTodayNews(item)) {
-                score += 15
-                reasons.add("published today")
-            }
-
-            val isHot = score >= 30
-            val isViral = score >= 35 && viralHits > 0
-
-            ScoredNews(
-                item = item,
-                score = score,
-                reason = reasons.joinToString(", "),
-                isHot = isHot,
-                isPotentialViral = isViral
-            )
-        }
-    }
-
-    private fun findRelatedNewsClusters(items: List<RssItem>): Map<String, List<RssItem>> {
-        val clusters = linkedMapOf<String, MutableList<RssItem>>()
-        for (item in items) {
-            val topic = detectPrimaryTopic(item)
-            clusters.getOrPut(topic) { mutableListOf() }.add(item)
-        }
-        return clusters.filterValues { it.size >= 2 }
-    }
-
-    private fun detectPrimaryTopic(item: RssItem): String {
-        val text = "${item.title} ${item.description}".lowercase(Locale.getDefault())
-        return when {
-            listOf("ai", "openai", "gemini", "chatgpt", "llm").any { text.contains(it) } -> "AI"
-            listOf("market", "stock", "economy", "inflation", "crypto").any { text.contains(it) } -> "Finance"
-            listOf("election", "government", "policy", "minister", "parliament").any { text.contains(it) } -> "Politics"
-            listOf("match", "league", "cup", "goal", "cricket", "football").any { text.contains(it) } -> "Sports"
-            listOf("movie", "actor", "celebrity", "music", "show").any { text.contains(it) } -> "Entertainment"
-            else -> item.feedCategory.ifBlank { "General" }
-        }
+        WorkflowResult(
+            fetchedCount = fetchedCount,
+            processedCount = processedCount,
+            savedDraftCount = savedDraftCount,
+            pushedDraftCount = pushedDraftCount,
+            failures = failures
+        )
     }
 
     private fun isLikelyNews(item: RssItem): Boolean {
@@ -240,35 +121,5 @@ class NewsWorkflowManager(private val context: Context) {
         val text = "${item.title} ${item.description}".lowercase()
         val blocked = listOf("advertisement", "sponsored", "coupon", "deal")
         return blocked.none { text.contains(it) }
-    }
-
-    private fun isTodayNews(item: RssItem): Boolean {
-        val source = item.pubDate.trim()
-        if (source.isBlank()) return true // keep if feed doesn't provide date
-
-        val today = LocalDate.now(ZoneOffset.UTC)
-
-        val instantParsers = listOf(
-            DateTimeFormatter.RFC_1123_DATE_TIME,
-            DateTimeFormatter.ISO_DATE_TIME
-        )
-        for (fmt in instantParsers) {
-            try {
-                val date = Instant.from(fmt.parse(source)).atZone(ZoneOffset.UTC).toLocalDate()
-                return date == today
-            } catch (_: Exception) {
-            }
-        }
-
-        val simpleFormats = listOf("yyyy-MM-dd", "dd MMM yyyy")
-        for (pattern in simpleFormats) {
-            try {
-                val date = LocalDate.parse(source.take(pattern.length), DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH))
-                return date == today
-            } catch (_: Exception) {
-            }
-        }
-
-        return true
     }
 }
