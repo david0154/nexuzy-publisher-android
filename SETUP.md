@@ -49,3 +49,8 @@
 - If Gemini keys are missing, app redirects to Settings at launch and writing pipeline cannot start.
 - OpenAI/Sarvam keys are optional for best quality but recommended.
 - WordPress credentials are required for draft push.
+
+
+## 9) Firestore rules
+- Apply recommended rules from `FIREBASE_RULES.md`
+- Ensure users only access `users/{uid}` and `users/{uid}/rss_links/*`

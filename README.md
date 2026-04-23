@@ -34,3 +34,7 @@ Nexuzy Publisher Android is an AI-powered RSS-to-WordPress drafting app.
 ## Quick paths
 - Firebase file path: `app/google-services.json`
 - App logo/icon path: `app/src/main/res/mipmap-*` (and `mipmap-anydpi-v26`)
+
+
+## Firebase security
+- See `FIREBASE_RULES.md` for recommended Firestore security rules.

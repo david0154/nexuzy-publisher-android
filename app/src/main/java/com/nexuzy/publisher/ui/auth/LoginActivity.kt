@@ -2,22 +2,19 @@ package com.nexuzy.publisher.ui.auth
 
 import android.content.Intent
 import android.os.Bundle
-import android.view.Gravity
-import android.view.ViewGroup
 import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.auth.FirebaseAuth
+import com.nexuzy.publisher.R
+import com.nexuzy.publisher.auth.GoogleSignInManager
 import com.nexuzy.publisher.data.firebase.FirebaseUserRepository
 import com.nexuzy.publisher.data.model.firebase.FirebaseUserProfile
 import com.nexuzy.publisher.data.prefs.AppPreferences
 import com.nexuzy.publisher.ui.main.MainActivity
 import kotlinx.coroutines.launch
-import com.nexuzy.publisher.auth.GoogleSignInManager
 
 class LoginActivity : AppCompatActivity() {
 
@@ -68,47 +65,15 @@ class LoginActivity : AppCompatActivity() {
         }
 
         signInManager = GoogleSignInManager(this, clientId)
-        setContentView(createContentView())
-    }
+        setContentView(R.layout.activity_login)
 
-    private fun createContentView(): LinearLayout {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(48, 48, 48, 48)
-            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        findViewById<Button>(R.id.btnGoogleSignIn).setOnClickListener {
+            googleLauncher.launch(signInManager.signInIntent())
         }
 
-        val title = TextView(this).apply {
-            text = "Sign in to sync RSS"
-            textSize = 22f
-            gravity = Gravity.CENTER
+        findViewById<Button>(R.id.btnSkipLogin).setOnClickListener {
+            openMain()
         }
-
-        val sub = TextView(this).apply {
-            text = "Use Google login to save user profile and RSS links in Firebase."
-            textSize = 14f
-            gravity = Gravity.CENTER
-            setPadding(0, 16, 0, 24)
-        }
-
-        val signIn = Button(this).apply {
-            text = "Continue with Google"
-            setOnClickListener {
-                googleLauncher.launch(signInManager.signInIntent())
-            }
-        }
-
-        val skip = Button(this).apply {
-            text = "Skip for now"
-            setOnClickListener { openMain() }
-        }
-
-        root.addView(title)
-        root.addView(sub)
-        root.addView(signIn)
-        root.addView(skip)
-        return root
     }
 
     private fun openMain() {
