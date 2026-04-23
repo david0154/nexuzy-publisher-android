@@ -73,6 +73,7 @@ class AiPipeline(private val context: Context) {
     ): PipelineResult = withContext(Dispatchers.IO) {
 
         val stepErrors = mutableListOf<String>()
+        var rewrittenTitle = rssItem.title
 
         // ─── STEP 1: Gemini Writes Article ───
         onProgress?.invoke(PipelineProgress(Step.GEMINI_WRITING, "📝 Gemini is writing the article…"))
@@ -87,7 +88,7 @@ class AiPipeline(private val context: Context) {
             Log.e("AiPipeline", "Gemini failed: ${geminiResult.error}")
             return@withContext PipelineResult(
                 success = false,
-                title = rssItem.title,
+                title = rewrittenTitle,
                 error = "Gemini writing failed: ${geminiResult.error}"
             )
         }
@@ -125,7 +126,7 @@ class AiPipeline(private val context: Context) {
         // ─── STEP 4: Gemini SEO Generation ───
         onProgress?.invoke(PipelineProgress(Step.SEO_GENERATING, "🔎 Generating SEO tags, keywords & meta…"))
         val seoResult = gemini.generateSeoData(
-            title = rssItem.title,
+            title = rewrittenTitle,
             articleContent = currentContent,
             category = rssItem.feedCategory,
             model = model
@@ -162,10 +163,12 @@ class AiPipeline(private val context: Context) {
         onProgress?.invoke(PipelineProgress(Step.COMPLETE, "✅ All steps complete!"))
 
         // Build fully-populated Article
+        rewrittenTitle = if (focusKeyphrase.isNotBlank()) "${focusKeyphrase.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }}: ${rssItem.title}" else rssItem.title
+
         val article = Article(
-            title = rssItem.title,
+            title = rewrittenTitle,
             content = currentContent,
-            summary = metaDescription.ifBlank { currentContent.take(160) },
+            summary = metaDescription.ifBlank { rssItem.description.ifBlank { currentContent.take(160) } },
             category = rssItem.feedCategory,
             tags = tags,
             metaKeywords = metaKeywords,
@@ -175,7 +178,7 @@ class AiPipeline(private val context: Context) {
             sourceName = rssItem.feedName,
             imageUrl = rssItem.imageUrl,
             imagePath = localImagePath,
-            status = "ready",
+            status = "draft",
             wordpressSiteId = wordpressSiteId,
             geminiChecked = true,
             openaiChecked = openAiResult.success,
@@ -190,7 +193,7 @@ class AiPipeline(private val context: Context) {
             success = true,
             article = article,
             finalContent = currentContent,
-            title = rssItem.title,
+            title = rewrittenTitle,
             geminiDone = true,
             openAiDone = openAiResult.success,
             sarvamDone = sarvamResult.success,

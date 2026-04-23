@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/main_nav_graph"
+    app:startDestination="@id/nav_dashboard">
+
+    <fragment
+        android:id="@+id/nav_dashboard"
+        android:name="com.nexuzy.publisher.ui.main.fragments.DashboardFragment"
+        android:label="Dashboard" />
+
+    <fragment
+        android:id="@+id/nav_rss"
+        android:name="com.nexuzy.publisher.ui.main.fragments.RssFragment"
+        android:label="RSS" />
+
+    <fragment
+        android:id="@+id/nav_articles"
+        android:name="com.nexuzy.publisher.ui.main.fragments.ArticlesFragment"
+        android:label="Articles" />
+
+    <fragment
+        android:id="@+id/nav_ai_writer"
+        android:name="com.nexuzy.publisher.ui.main.fragments.AiWriterFragment"
+        android:label="AI Writer" />
+
+    <fragment
+        android:id="@+id/nav_wordpress"
+        android:name="com.nexuzy.publisher.ui.main.fragments.WordPressFragment"
+        android:label="WordPress" />
+</navigation>
