@@ -24,7 +24,7 @@ class ArticleEditorActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityArticleEditorBinding
     private lateinit var apiKeyManager: ApiKeyManager
-    private val wpClient = WordPressApiClient()
+    private lateinit var wpClient: WordPressApiClient
     private val viewModel: ArticleEditorViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -36,6 +36,7 @@ class ArticleEditorActivity : AppCompatActivity() {
         supportActionBar?.title = "AI Article Editor"
 
         apiKeyManager = ApiKeyManager(this)
+        wpClient = WordPressApiClient()
         observePipelineState()
         setupBackPressConfirmation()
 
@@ -74,37 +75,6 @@ class ArticleEditorActivity : AppCompatActivity() {
         binding.btnPublishDraft.setOnClickListener {
             publishDraftToWordPress()
         }
-
-        binding.btnPublishDraft.setOnClickListener {
-            publishDraftToWordPress()
-        }
-    }
-
-    private fun observePipelineState() {
-        viewModel.pipelineState.observe(this, Observer { state ->
-            binding.progressGroup.visibility = if (state.loading) View.VISIBLE else View.GONE
-            binding.btnRunAiPipeline.isEnabled = !state.loading
-            binding.tvPipelineStatus.text = state.statusText
-
-            if (state.finalContent.isNotBlank()) {
-                binding.etArticleContent.setText(state.finalContent)
-            }
-
-            binding.chipGemini.isChecked = state.geminiDone
-            binding.chipOpenai.isChecked = state.openAiDone
-            binding.chipSarvam.isChecked = state.sarvamDone
-
-            if (state.factFeedback.isNotBlank()) {
-                binding.tvFactFeedback.text = state.factFeedback
-                binding.tvFactFeedback.visibility = View.VISIBLE
-            } else {
-                binding.tvFactFeedback.visibility = View.GONE
-            }
-
-            if (state.error.isNotBlank()) {
-                Toast.makeText(this, state.error, Toast.LENGTH_LONG).show()
-            }
-        })
     }
 
     private fun setupBackPressConfirmation() {
@@ -145,8 +115,6 @@ class ArticleEditorActivity : AppCompatActivity() {
             if (state.finalContent.isNotBlank()) {
                 binding.etArticleContent.setText(state.finalContent)
             }
-        }
-    }
 
             binding.chipGemini.isChecked = state.geminiDone
             binding.chipOpenai.isChecked = state.openAiDone

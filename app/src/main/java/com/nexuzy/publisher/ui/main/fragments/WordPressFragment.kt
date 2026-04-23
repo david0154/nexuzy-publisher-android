@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.Button
 import androidx.fragment.app.Fragment
 import com.nexuzy.publisher.R
+import com.nexuzy.publisher.ui.editor.ArticleEditorActivity
 import com.nexuzy.publisher.ui.settings.SettingsActivity
 
 class WordPressFragment : Fragment() {
@@ -15,6 +16,9 @@ class WordPressFragment : Fragment() {
         val root = inflater.inflate(R.layout.fragment_wordpress, container, false)
         root.findViewById<Button>(R.id.btnOpenWpSettings).setOnClickListener {
             startActivity(Intent(requireContext(), SettingsActivity::class.java))
+        }
+        root.findViewById<Button>(R.id.btnOpenEditorFromWp).setOnClickListener {
+            startActivity(Intent(requireContext(), ArticleEditorActivity::class.java))
         }
         return root
     }
