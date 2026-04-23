@@ -1,5 +1,6 @@
 package com.nexuzy.publisher.ui.main.fragments
 
+import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -9,6 +10,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.nexuzy.publisher.data.db.AppDatabase
 import com.nexuzy.publisher.databinding.FragmentArticlesBinding
 import com.nexuzy.publisher.ui.main.adapters.ArticleAdapter
+import com.nexuzy.publisher.ui.editor.ArticleEditorActivity
 
 class ArticlesFragment : Fragment() {
 
@@ -23,13 +25,20 @@ class ArticlesFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        adapter = ArticleAdapter()
+        adapter = ArticleAdapter { article ->
+            startActivity(Intent(requireContext(), ArticleEditorActivity::class.java).apply {
+                putExtra("rss_title", article.title)
+                putExtra("rss_description", article.summary)
+                putExtra("rss_link", article.sourceUrl)
+                putExtra("rss_category", article.category)
+            })
+        }
         binding.rvArticles.layoutManager = LinearLayoutManager(requireContext())
         binding.rvArticles.adapter = adapter
 
         AppDatabase.getDatabase(requireContext()).articleDao().getAllArticles()
             .observe(viewLifecycleOwner) { articles ->
-                adapter.submitList(articles)
+                adapter.submitList(articles.toList())
             }
     }
 

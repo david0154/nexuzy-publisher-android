@@ -52,6 +52,13 @@
         android:layout_height="wrap_content"
         android:text="Add RSS feed" />
 
+    <Button
+        android:id="@+id/btnFetchLatestNews"
+        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Fetch Latest 24h News" />
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvRssFeeds"
         android:layout_width="match_parent"

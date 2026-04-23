@@ -11,10 +11,15 @@ import com.nexuzy.publisher.network.WordPressApiClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeFormatterBuilder
+import java.time.format.DateTimeParseException
 import java.util.Locale
+import java.util.TimeZone
+import java.text.SimpleDateFormat
 
 /**
  * End-to-end workflow for:
@@ -252,29 +257,69 @@ class NewsWorkflowManager(private val context: Context) {
         val source = item.pubDate.trim()
         if (source.isBlank()) return true // keep if feed doesn't provide date
 
-        val today = LocalDate.now(ZoneOffset.UTC)
+        val now = Instant.now()
+        val cutoff = now.minusSeconds(24 * 60 * 60)
+        val parsed = parseRssInstant(source) ?: return false
+        return parsed >= cutoff && parsed <= now
+    }
 
-        val instantParsers = listOf(
+    private fun parseRssInstant(raw: String): Instant? {
+        val normalized = raw
+            .replace(" IST", " +0530")
+            .replace(" GMT", " +0000")
+            .trim()
+
+        val zoneAware = listOf(
             DateTimeFormatter.RFC_1123_DATE_TIME,
-            DateTimeFormatter.ISO_DATE_TIME
+            DateTimeFormatter.ISO_ZONED_DATE_TIME,
+            DateTimeFormatter.ISO_OFFSET_DATE_TIME,
+            DateTimeFormatterBuilder()
+                .parseCaseInsensitive()
+                .appendPattern("EEE, dd MMM yyyy HH:mm:ss Z")
+                .toFormatter(Locale.ENGLISH)
         )
-        for (fmt in instantParsers) {
+        for (fmt in zoneAware) {
             try {
-                val date = Instant.from(fmt.parse(source)).atZone(ZoneOffset.UTC).toLocalDate()
-                return date == today
+                return ZonedDateTime.parse(normalized, fmt).toInstant()
+            } catch (_: DateTimeParseException) {
+            } catch (_: Exception) {
+            }
+            try {
+                return Instant.from(fmt.parse(normalized))
             } catch (_: Exception) {
             }
         }
 
-        val simpleFormats = listOf("yyyy-MM-dd", "dd MMM yyyy")
-        for (pattern in simpleFormats) {
+        val localDateTimeFormats = listOf(
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "dd MMM yyyy HH:mm:ss",
+            "dd MMM yyyy HH:mm"
+        )
+        for (pattern in localDateTimeFormats) {
             try {
-                val date = LocalDate.parse(source.take(pattern.length), DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH))
-                return date == today
+                val ldt = LocalDateTime.parse(normalized, DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH))
+                return ldt.atZone(ZoneId.systemDefault()).toInstant()
             } catch (_: Exception) {
             }
         }
 
-        return false
+        val legacyFormats = listOf(
+            "EEE, dd MMM yyyy HH:mm:ss Z",
+            "EEE, dd MMM yyyy HH:mm:ss z",
+            "yyyy-MM-dd HH:mm:ss Z"
+        )
+        for (pattern in legacyFormats) {
+            try {
+                val sdf = SimpleDateFormat(pattern, Locale.ENGLISH).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+                val date = sdf.parse(normalized)
+                if (date != null) return date.toInstant()
+            } catch (_: Exception) {
+            }
+        }
+
+        return null
     }
 }

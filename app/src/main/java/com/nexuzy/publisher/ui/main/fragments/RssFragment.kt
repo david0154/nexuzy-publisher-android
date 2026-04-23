@@ -12,7 +12,10 @@ import com.nexuzy.publisher.data.db.AppDatabase
 import com.nexuzy.publisher.data.model.RssFeed
 import com.nexuzy.publisher.databinding.FragmentRssBinding
 import com.nexuzy.publisher.ui.main.adapters.RssFeedAdapter
+import com.nexuzy.publisher.workflow.NewsWorkflowManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class RssFragment : Fragment() {
 
@@ -57,6 +60,21 @@ class RssFragment : Fragment() {
                 binding.etFeedUrl.setText("")
                 binding.etFeedCategory.setText("")
                 Toast.makeText(requireContext(), "RSS feed added", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        binding.btnFetchLatestNews.setOnClickListener {
+            binding.btnFetchLatestNews.isEnabled = false
+            viewLifecycleOwner.lifecycleScope.launch {
+                val snapshot = withContext(Dispatchers.IO) {
+                    NewsWorkflowManager(requireContext()).fetchTodayHotNews(limitPerFeed = 20)
+                }
+                binding.btnFetchLatestNews.isEnabled = true
+                Toast.makeText(
+                    requireContext(),
+                    "Fetched ${snapshot.allToday.size} items from last 24h. Hot: ${snapshot.hotNews.size}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }

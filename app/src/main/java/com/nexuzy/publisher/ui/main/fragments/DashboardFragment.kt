@@ -5,10 +5,8 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.fragment.app.Fragment
-import androidx.lifecycle.lifecycleScope
 import com.nexuzy.publisher.data.db.AppDatabase
 import com.nexuzy.publisher.databinding.FragmentDashboardBinding
-import kotlinx.coroutines.launch
 
 class DashboardFragment : Fragment() {
 
@@ -20,24 +18,19 @@ class DashboardFragment : Fragment() {
         return binding.root
     }
 
-    override fun onResume() {
-        super.onResume()
-        refreshStats()
-    }
-
-    private fun refreshStats() {
-        viewLifecycleOwner.lifecycleScope.launch {
-            val db = AppDatabase.getDatabase(requireContext())
-            val articleDao = db.articleDao()
-            val total = articleDao.getTotalCount()
-            val drafts = articleDao.getDraftCount()
-            val published = articleDao.getPublishedCount()
-            val feeds = db.rssFeedDao().getActiveFeeds().size
-
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        val db = AppDatabase.getDatabase(requireContext())
+        db.articleDao().getAllArticles().observe(viewLifecycleOwner) { articles ->
+            val total = articles.size
+            val drafts = articles.count { it.status.equals("draft", ignoreCase = true) }
+            val published = articles.count { it.status.equals("published", ignoreCase = true) }
             binding.tvTotalArticles.text = "Total articles: $total"
             binding.tvDraftArticles.text = "Drafts: $drafts"
             binding.tvPublishedArticles.text = "Published: $published"
-            binding.tvTotalFeeds.text = "Configured RSS feeds: $feeds"
+        }
+        db.rssFeedDao().getAllFeeds().observe(viewLifecycleOwner) { feeds ->
+            binding.tvTotalFeeds.text = "Configured RSS feeds: ${feeds.count { it.isActive }}"
         }
     }
 
