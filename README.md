@@ -28,3 +28,8 @@ Nexuzy Publisher Android is an AI-powered RSS-to-WordPress drafting app.
 - `SETUP.md`
 - `PRIVACY.md`
 - `LICENSE`
+
+
+## Quick paths
+- Firebase file path: `app/google-services.json`
+- App logo/icon path: `app/src/main/res/mipmap-*` (and `mipmap-anydpi-v26`)

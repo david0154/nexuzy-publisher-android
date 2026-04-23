@@ -73,6 +73,7 @@ class AiPipeline(private val context: Context) {
     ): PipelineResult = withContext(Dispatchers.IO) {
 
         val stepErrors = mutableListOf<String>()
+        var rewrittenTitle = rssItem.title
 
         // ─── STEP 1: Gemini Writes Article ───
         onProgress?.invoke(PipelineProgress(Step.GEMINI_WRITING, "📝 Gemini is writing the article…"))
@@ -162,7 +163,7 @@ class AiPipeline(private val context: Context) {
         onProgress?.invoke(PipelineProgress(Step.COMPLETE, "✅ All steps complete!"))
 
         // Build fully-populated Article
-        val rewrittenTitle = if (focusKeyphrase.isNotBlank()) "${focusKeyphrase.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }}: ${rssItem.title}" else rssItem.title
+        rewrittenTitle = if (focusKeyphrase.isNotBlank()) "${focusKeyphrase.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }}: ${rssItem.title}" else rssItem.title
 
         val article = Article(
             title = rewrittenTitle,
