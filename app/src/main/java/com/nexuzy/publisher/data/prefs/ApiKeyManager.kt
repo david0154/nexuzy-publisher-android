@@ -3,6 +3,8 @@ package com.nexuzy.publisher.data.prefs
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 
 /**
  * Manages API keys and integration settings.
@@ -11,8 +13,25 @@ import androidx.core.content.edit
  */
 class ApiKeyManager(context: Context) {
 
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences("nexuzy_api_keys", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = createPrefs(context)
+
+    private fun createPrefs(context: Context): SharedPreferences {
+        return try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+
+            EncryptedSharedPreferences.create(
+                context,
+                "nexuzy_api_keys_secure",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (_: Exception) {
+            context.getSharedPreferences("nexuzy_api_keys", Context.MODE_PRIVATE)
+        }
+    }
 
     fun setGeminiKey(index: Int, key: String) = prefs.edit { putString("gemini_key_$index", key) }
     fun getGeminiKey(index: Int): String = prefs.getString("gemini_key_$index", "") ?: ""

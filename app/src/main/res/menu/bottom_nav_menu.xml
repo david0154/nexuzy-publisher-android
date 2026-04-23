@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:id="@+id/nav_dashboard" android:title="Dashboard" android:icon="@android:drawable/ic_menu_view"/>
-    <item android:id="@+id/nav_rss" android:title="RSS" android:icon="@android:drawable/ic_menu_rotate"/>
-    <item android:id="@+id/nav_articles" android:title="Articles" android:icon="@android:drawable/ic_menu_agenda"/>
-    <item android:id="@+id/nav_ai_writer" android:title="AI" android:icon="@android:drawable/ic_menu_edit"/>
-    <item android:id="@+id/nav_wordpress" android:title="WP" android:icon="@android:drawable/ic_menu_upload"/>
+    <item android:id="@+id/nav_dashboard" android:title="Dashboard" android:icon="@drawable/ic_nav_dashboard"/>
+    <item android:id="@+id/nav_rss" android:title="RSS" android:icon="@drawable/ic_nav_rss"/>
+    <item android:id="@+id/nav_articles" android:title="Articles" android:icon="@drawable/ic_nav_articles"/>
+    <item android:id="@+id/nav_ai_writer" android:title="AI" android:icon="@drawable/ic_nav_ai"/>
+    <item android:id="@+id/nav_wordpress" android:title="WP" android:icon="@drawable/ic_nav_wordpress"/>
 </menu>

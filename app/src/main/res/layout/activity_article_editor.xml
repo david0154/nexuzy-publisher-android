@@ -10,9 +10,38 @@
         android:orientation="vertical"
         android:padding="16dp">
 
-        <EditText android:id="@+id/etArticleTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Article title"/>
-        <EditText android:id="@+id/etArticleSummary" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Summary"/>
-        <EditText android:id="@+id/etArticleContent" android:layout_width="match_parent" android:layout_height="200dp" android:gravity="top" android:hint="Content"/>
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Article title">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etArticleTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Summary">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etArticleSummary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Content">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etArticleContent"
+                android:layout_width="match_parent"
+                android:layout_height="200dp"
+                android:gravity="top"
+                android:inputType="textMultiLine"
+                android:minLines="8"/>
+        </com.google.android.material.textfield.TextInputLayout>
 
         <LinearLayout
             android:id="@+id/progressGroup"

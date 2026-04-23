@@ -5,10 +5,36 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.fragment.app.Fragment
-import com.nexuzy.publisher.R
+import androidx.recyclerview.widget.LinearLayoutManager
+import com.nexuzy.publisher.data.db.AppDatabase
+import com.nexuzy.publisher.databinding.FragmentArticlesBinding
+import com.nexuzy.publisher.ui.main.adapters.ArticleAdapter
 
 class ArticlesFragment : Fragment() {
+
+    private var _binding: FragmentArticlesBinding? = null
+    private val binding get() = _binding!!
+    private lateinit var adapter: ArticleAdapter
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        return inflater.inflate(R.layout.fragment_articles, container, false)
+        _binding = FragmentArticlesBinding.inflate(inflater, container, false)
+        return binding.root
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+        adapter = ArticleAdapter()
+        binding.rvArticles.layoutManager = LinearLayoutManager(requireContext())
+        binding.rvArticles.adapter = adapter
+
+        AppDatabase.getDatabase(requireContext()).articleDao().getAllArticles()
+            .observe(viewLifecycleOwner) { articles ->
+                adapter.submitList(articles)
+            }
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null
     }
 }
