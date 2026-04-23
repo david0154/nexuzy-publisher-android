@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent">
 
@@ -21,13 +22,47 @@
             <TextView android:id="@+id/tvPipelineStatus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Status"/>
         </LinearLayout>
 
-        <CheckBox android:id="@+id/chipGemini" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Gemini"/>
-        <CheckBox android:id="@+id/chipOpenai" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="OpenAI"/>
-        <CheckBox android:id="@+id/chipSarvam" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Sarvam"/>
+        <com.google.android.material.chip.Chip
+            android:id="@+id/chipGemini"
+            style="@style/Widget.MaterialComponents.Chip.Choice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Gemini"
+            app:checkedIconVisible="false" />
+        <com.google.android.material.chip.Chip
+            android:id="@+id/chipOpenai"
+            style="@style/Widget.MaterialComponents.Chip.Choice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="OpenAI"
+            app:checkedIconVisible="false" />
+        <com.google.android.material.chip.Chip
+            android:id="@+id/chipSarvam"
+            style="@style/Widget.MaterialComponents.Chip.Choice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sarvam"
+            app:checkedIconVisible="false" />
 
         <TextView android:id="@+id/tvFactFeedback" android:layout_width="match_parent" android:layout_height="wrap_content" android:visibility="gone"/>
 
-        <Button android:id="@+id/btnRunAiPipeline" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Run AI"/>
-        <Button android:id="@+id/btnSaveDraft" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Save Draft"/>
+        <Button
+            android:id="@+id/btnRunAiPipeline"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Run AI" />
+        <Button
+            android:id="@+id/btnSaveDraft"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Save Draft" />
+        <Button
+            android:id="@+id/btnPublishDraft"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/publish_to_wordpress" />
     </LinearLayout>
 </ScrollView>
