@@ -61,3 +61,8 @@
 - Replace login/logo drawable at: `app/src/main/res/drawable/app_logo.xml` (or replace with `app_logo.png`).
 - Replace splash logo at: `app/src/main/res/drawable/ic_splash_logo.xml`.
 - Replace launcher app icon using Android Studio Image Asset into `mipmap-*` (`ic_launcher`, `ic_launcher_round`).
+
+
+## 10) Kotlin compatibility note
+- If you are on Kotlin 1.9.x, use stable Firebase versions pinned in `app/build.gradle` (auth 23.x).
+- If you upgrade to Kotlin 2.x, then you can move to newer Firebase major versions.
