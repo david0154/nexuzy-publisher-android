@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView android:id="@+id/tvAppVersion" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Version" />
+        <TextView android:id="@+id/tvDeveloperName" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Developer" />
+        <TextView android:id="@+id/tvDeveloperCompany" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Company" />
+        <TextView android:id="@+id/tvDeveloperLocation" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Location" />
+
+        <Button android:id="@+id/btnGithubRepo" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="GitHub" />
+        <Button android:id="@+id/btnDesktopVersion" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Support" />
+        <Button android:id="@+id/btnWebsite" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Privacy" />
+    </LinearLayout>
+</ScrollView>
