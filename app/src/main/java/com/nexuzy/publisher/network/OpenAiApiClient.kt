@@ -102,7 +102,8 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
             1. Identify any factual errors or unverifiable claims
             2. Check if statistics, dates, names are accurate
             3. Flag any misleading statements
-            4. Provide a confidence score (0-100)
+            4. Verify against the latest publicly known internet/news context when possible
+            5. Provide a confidence score (0-100)
 
             Respond ONLY in this exact JSON format:
             {

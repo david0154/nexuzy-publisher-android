@@ -3,6 +3,8 @@ package com.nexuzy.publisher.data.prefs
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 
 /**
  * Manages up to 3 API keys per provider with automatic rotation.
@@ -11,8 +13,25 @@ import androidx.core.content.edit
  */
 class ApiKeyManager(context: Context) {
 
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences("nexuzy_api_keys", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = createPrefs(context)
+
+    private fun createPrefs(context: Context): SharedPreferences {
+        return try {
+            val masterKey = MasterKey.Builder(context)
+                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                .build()
+
+            EncryptedSharedPreferences.create(
+                context,
+                "nexuzy_api_keys_secure",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (_: Exception) {
+            context.getSharedPreferences("nexuzy_api_keys", Context.MODE_PRIVATE)
+        }
+    }
 
     // ────── Gemini (up to 3 keys) ──────
     fun setGeminiKey(index: Int, key: String) = prefs.edit { putString("gemini_key_$index", key) }
@@ -32,9 +51,6 @@ class ApiKeyManager(context: Context) {
     private fun getCurrentGeminiIndex(): Int = prefs.getInt("gemini_current_index", 0)
     private fun getCurrentOpenAiIndex(): Int = prefs.getInt("openai_current_index", 0)
 
-    /**
-     * Get the current active Gemini key. If it is rate-limited, rotate to next.
-     */
     fun getActiveGeminiKey(): String? {
         val keys = getGeminiKeys()
         if (keys.isEmpty()) return null
@@ -42,23 +58,15 @@ class ApiKeyManager(context: Context) {
         return keys[index]
     }
 
-    /**
-     * Mark current Gemini key as exhausted and rotate to next key.
-     * Returns the next available key or null if all exhausted.
-     */
     fun rotateGeminiKey(): String? {
         val keys = getGeminiKeys()
         if (keys.isEmpty()) return null
         val current = getCurrentGeminiIndex()
         val next = (current + 1) % keys.size
         prefs.edit { putInt("gemini_current_index", next) }
-        // Check if we've looped fully (all keys tried)
         return if (next == 0 && current != 0) null else keys[next]
     }
 
-    /**
-     * Get the current active OpenAI key.
-     */
     fun getActiveOpenAiKey(): String? {
         val keys = getOpenAiKeys()
         if (keys.isEmpty()) return null
@@ -66,9 +74,6 @@ class ApiKeyManager(context: Context) {
         return keys[index]
     }
 
-    /**
-     * Mark current OpenAI key as exhausted and rotate to next.
-     */
     fun rotateOpenAiKey(): String? {
         val keys = getOpenAiKeys()
         if (keys.isEmpty()) return null
@@ -92,4 +97,11 @@ class ApiKeyManager(context: Context) {
     fun getWordPressUsername(): String = prefs.getString("wp_username", "") ?: ""
     fun setWordPressPassword(p: String) = prefs.edit { putString("wp_password", p) }
     fun getWordPressPassword(): String = prefs.getString("wp_password", "") ?: ""
+
+    fun setWordPressLoginEnabled(enabled: Boolean) = prefs.edit { putBoolean("wp_login_enabled", enabled) }
+    fun isWordPressLoginEnabled(): Boolean = prefs.getBoolean("wp_login_enabled", true)
+
+    fun setWordPressAdsCode(code: String) = prefs.edit { putString("wp_ads_code", code) }
+    fun getWordPressAdsCode(): String = prefs.getString("wp_ads_code", "") ?: ""
+
 }

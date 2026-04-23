@@ -26,6 +26,7 @@
     <string name="settings_openai_title">OpenAI API Keys</string>
     <string name="settings_sarvam_title">Sarvam AI API Key</string>
     <string name="settings_wordpress_title">WordPress Site</string>
+    <string name="settings_wp_ads_code">WordPress Ads Code</string>
     <string name="api_key_1">API Key 1</string>
     <string name="api_key_2">API Key 2</string>
     <string name="api_key_3">API Key 3</string>
@@ -36,14 +37,20 @@
     <!-- About -->
     <string name="about_developer">Developer</string>
     <string name="developer_name">David</string>
-    <string name="developer_company">Nexuzy Tech</string>
+    <string name="developer_company">Nexuzy Lab</string>
     <string name="developer_location">Kolkata, India</string>
     <string name="github_repo">GitHub Repository</string>
     <string name="github_url">https://github.com/david0154/nexuzy-publisher-android</string>
     <string name="source_desktop_repo">Desktop Version</string>
     <string name="desktop_url">https://github.com/david0154/nexuzy-publisher-desk</string>
-    <string name="website_url">https://hypechats.com</string>
-    <string name="about_description">Nexuzy Publisher is an AI-powered news publishing platform that uses Gemini AI for writing, Sarvam AI for grammar checking, and OpenAI for fact verification. Built for professional journalists and bloggers.</string>
+    <string name="website_url">https://github.com/david0154/nexuzy-publisher-android</string>
+    <string name="about_description">Nexuzy Publisher is an AI-powered news publishing platform that uses Gemini AI for writing, Sarvam AI for grammar checking, and OpenAI for fact verification. Built by David at Nexuzy Lab.</string>
+    <string name="privacy_policy_label">Privacy Policy</string>
+    <string name="privacy_policy_url">https://github.com/david0154/nexuzy-publisher-android/blob/main/PRIVACY.md</string>
+    <string name="support_label">Support Email</string>
+    <string name="support_email">nexuzylab@gmail.com</string>
+    <string name="opensource_label">Open Source Repo</string>
+    <string name="license_short">Free to use, modification not allowed, rights reserved by David and Nexuzy Lab.</string>
 
     <!-- General -->
     <string name="error_no_internet">No internet connection</string>

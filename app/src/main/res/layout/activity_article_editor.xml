@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Article title">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etArticleTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Summary">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etArticleSummary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Content">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/etArticleContent"
+                android:layout_width="match_parent"
+                android:layout_height="200dp"
+                android:gravity="top"
+                android:inputType="textMultiLine"
+                android:minLines="8"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <LinearLayout
+            android:id="@+id/progressGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <TextView android:id="@+id/tvPipelineStatus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Status"/>
+        </LinearLayout>
+
+        <com.google.android.material.chip.Chip
+            android:id="@+id/chipGemini"
+            style="@style/Widget.MaterialComponents.Chip.Choice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Gemini"
+            app:checkedIconVisible="false" />
+        <com.google.android.material.chip.Chip
+            android:id="@+id/chipOpenai"
+            style="@style/Widget.MaterialComponents.Chip.Choice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="OpenAI"
+            app:checkedIconVisible="false" />
+        <com.google.android.material.chip.Chip
+            android:id="@+id/chipSarvam"
+            style="@style/Widget.MaterialComponents.Chip.Choice"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Sarvam"
+            app:checkedIconVisible="false" />
+
+        <TextView android:id="@+id/tvFactFeedback" android:layout_width="match_parent" android:layout_height="wrap_content" android:visibility="gone"/>
+
+        <Button
+            android:id="@+id/btnRunAiPipeline"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Run AI" />
+        <Button
+            android:id="@+id/btnSaveDraft"
+            style="@style/Widget.MaterialComponents.Button"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Save Draft" />
+        <Button
+            android:id="@+id/btnPublishDraft"
+            style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/publish_to_wordpress" />
+    </LinearLayout>
+</ScrollView>
