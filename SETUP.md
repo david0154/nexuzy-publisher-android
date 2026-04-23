@@ -30,15 +30,3 @@
 5. App writes/rewrites with Gemini.
 6. App cleans text via Sarvam.
 7. App saves local draft and pushes draft to WordPress.
-
-
-## 6) Firebase JSON location
-- Place downloaded file at: `app/google-services.json`
-- Do not place it in project root.
-
-## 7) App logo/icon location
-- Replace launcher icons in:
-  - `app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`
-  - `app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml`
-  - PNG assets under `app/src/main/res/mipmap-*`
-- Manifest already points to `@mipmap/ic_launcher` and `@mipmap/ic_launcher_round`.

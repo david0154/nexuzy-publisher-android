@@ -31,6 +31,11 @@ class AboutActivity : AppCompatActivity() {
             btnDesktopVersion.text = getString(R.string.support_label)
             btnWebsite.text = getString(R.string.privacy_policy_label)
 
+            // Existing button slots reused for important project links
+            btnGithubRepo.text = getString(R.string.opensource_label)
+            btnDesktopVersion.text = getString(R.string.support_label)
+            btnWebsite.text = getString(R.string.privacy_policy_label)
+
             btnGithubRepo.setOnClickListener {
                 openUrl(getString(R.string.github_url))
             }
