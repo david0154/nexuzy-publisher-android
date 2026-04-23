@@ -32,4 +32,7 @@ interface ArticleDao {
 
     @Query("SELECT COUNT(*) FROM articles WHERE status = 'draft'")
     suspend fun getDraftCount(): Int
+
+    @Query("SELECT COUNT(*) FROM articles WHERE sourceUrl = :sourceUrl")
+    suspend fun countBySourceUrl(sourceUrl: String): Int
 }
