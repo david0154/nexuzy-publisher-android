@@ -23,7 +23,13 @@ class AboutActivity : AppCompatActivity() {
             tvAppVersion.text = getString(R.string.app_version)
             tvDeveloperName.text = getString(R.string.developer_name)
             tvDeveloperCompany.text = getString(R.string.developer_company)
-            tvDeveloperLocation.text = getString(R.string.developer_location)
+            tvDeveloperLocation.text = "${getString(R.string.developer_location)} • ${getString(R.string.github_url)}"
+            tvDeveloperLocation.setOnClickListener { openUrl(getString(R.string.github_url)) }
+
+            // Existing button slots reused for important project links
+            btnGithubRepo.text = getString(R.string.opensource_label)
+            btnDesktopVersion.text = getString(R.string.support_label)
+            btnWebsite.text = getString(R.string.privacy_policy_label)
 
             // Existing button slots reused for important project links
             btnGithubRepo.text = getString(R.string.opensource_label)
