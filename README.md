@@ -11,6 +11,7 @@ Nexuzy Publisher Android is an AI-powered RSS-to-WordPress drafting app.
 6. Save draft locally and push WordPress draft with SEO data.
 
 ## What is now supported
+- Google login screen (LoginActivity) before main flow when Google client ID is configured.
 - Multi-RSS fetch and de-dup by link.
 - Today filter + score-based ranking.
 - Top articles list for daily posting.

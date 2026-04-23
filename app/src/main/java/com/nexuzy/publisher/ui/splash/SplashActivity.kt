@@ -8,7 +8,10 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import com.nexuzy.publisher.R
+import com.google.firebase.auth.FirebaseAuth
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
+import com.nexuzy.publisher.data.prefs.AppPreferences
+import com.nexuzy.publisher.ui.auth.LoginActivity
 import com.nexuzy.publisher.ui.main.MainActivity
 import com.nexuzy.publisher.ui.settings.SettingsActivity
 
@@ -32,7 +35,13 @@ class SplashActivity : AppCompatActivity() {
                 return@postDelayed
             }
 
-            startActivity(Intent(this, MainActivity::class.java))
+            val prefs = AppPreferences(this)
+            val user = FirebaseAuth.getInstance().currentUser
+            if (prefs.googleWebClientId.isNotBlank() && user == null) {
+                startActivity(Intent(this, LoginActivity::class.java))
+            } else {
+                startActivity(Intent(this, MainActivity::class.java))
+            }
             finish()
         }, 1200)
     }
