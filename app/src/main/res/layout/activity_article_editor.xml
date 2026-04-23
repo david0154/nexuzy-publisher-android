@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <EditText android:id="@+id/etArticleTitle" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Article title"/>
+        <EditText android:id="@+id/etArticleSummary" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Summary"/>
+        <EditText android:id="@+id/etArticleContent" android:layout_width="match_parent" android:layout_height="200dp" android:gravity="top" android:hint="Content"/>
+
+        <LinearLayout
+            android:id="@+id/progressGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+            <TextView android:id="@+id/tvPipelineStatus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Status"/>
+        </LinearLayout>
+
+        <CheckBox android:id="@+id/chipGemini" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Gemini"/>
+        <CheckBox android:id="@+id/chipOpenai" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="OpenAI"/>
+        <CheckBox android:id="@+id/chipSarvam" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Sarvam"/>
+
+        <TextView android:id="@+id/tvFactFeedback" android:layout_width="match_parent" android:layout_height="wrap_content" android:visibility="gone"/>
+
+        <Button android:id="@+id/btnRunAiPipeline" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Run AI"/>
+        <Button android:id="@+id/btnSaveDraft" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Save Draft"/>
+    </LinearLayout>
+</ScrollView>
