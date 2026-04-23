@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/main_nav_graph"
+    app:startDestination="@id/nav_dashboard">
+
+    <fragment android:id="@+id/nav_dashboard" android:name="androidx.fragment.app.Fragment" android:label="Dashboard"/>
+    <fragment android:id="@+id/nav_rss" android:name="androidx.fragment.app.Fragment" android:label="RSS"/>
+    <fragment android:id="@+id/nav_articles" android:name="androidx.fragment.app.Fragment" android:label="Articles"/>
+    <fragment android:id="@+id/nav_ai_writer" android:name="androidx.fragment.app.Fragment" android:label="AI Writer"/>
+    <fragment android:id="@+id/nav_wordpress" android:name="androidx.fragment.app.Fragment" android:label="WordPress"/>
+</navigation>

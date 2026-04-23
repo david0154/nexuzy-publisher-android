@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <EditText android:id="@+id/etGeminiKey1" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Gemini key 1"/>
+        <EditText android:id="@+id/etGeminiKey2" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Gemini key 2"/>
+        <EditText android:id="@+id/etGeminiKey3" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Gemini key 3"/>
+        <EditText android:id="@+id/etOpenaiKey1" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="OpenAI key 1"/>
+        <EditText android:id="@+id/etOpenaiKey2" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="OpenAI key 2"/>
+        <EditText android:id="@+id/etOpenaiKey3" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="OpenAI key 3"/>
+        <EditText android:id="@+id/etSarvamKey" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Sarvam key"/>
+        <EditText android:id="@+id/etWpSiteUrl" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="WP URL"/>
+        <EditText android:id="@+id/etWpUsername" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="WP username"/>
+        <EditText android:id="@+id/etWpPassword" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="WP password"/>
+        <EditText android:id="@+id/etWpAdsCode" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="WP ads code optional"/>
+
+        <Button android:id="@+id/btnSaveSettings" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Save Settings"/>
+    </LinearLayout>
+</ScrollView>
