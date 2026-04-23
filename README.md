@@ -38,3 +38,9 @@ Nexuzy Publisher Android is an AI-powered RSS-to-WordPress drafting app.
 
 ## Firebase security
 - See `FIREBASE_RULES.md` for recommended Firestore security rules.
+
+
+## Logo & icon notes
+- Replace login/logo drawable at: `app/src/main/res/drawable/app_logo.xml` (or replace with `app_logo.png`).
+- Replace splash logo at: `app/src/main/res/drawable/ic_splash_logo.xml`.
+- Replace launcher app icon using Android Studio Image Asset into `mipmap-*` (`ic_launcher`, `ic_launcher_round`).

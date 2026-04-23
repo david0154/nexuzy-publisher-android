@@ -7,6 +7,14 @@
     android:padding="24dp"
     android:background="#FFFFFF">
 
+    <ImageView
+        android:id="@+id/ivLoginLogo"
+        android:layout_width="88dp"
+        android:layout_height="88dp"
+        android:src="@drawable/app_logo"
+        android:contentDescription="App logo"
+        android:layout_marginBottom="12dp" />
+
     <TextView
         android:id="@+id/tvLoginTitle"
         android:layout_width="wrap_content"

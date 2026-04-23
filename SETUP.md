@@ -42,6 +42,7 @@
   - `app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml`
   - PNG assets under `app/src/main/res/mipmap-*`
 - Manifest already points to `@mipmap/ic_launcher` and `@mipmap/ic_launcher_round`.
+- Splash icon resource path: `app/src/main/res/drawable/ic_splash_logo.xml`
 
 
 ## 8) Critical runtime checklist
@@ -54,3 +55,9 @@
 ## 9) Firestore rules
 - Apply recommended rules from `FIREBASE_RULES.md`
 - Ensure users only access `users/{uid}` and `users/{uid}/rss_links/*`
+
+
+## Logo & icon notes
+- Replace login/logo drawable at: `app/src/main/res/drawable/app_logo.xml` (or replace with `app_logo.png`).
+- Replace splash logo at: `app/src/main/res/drawable/ic_splash_logo.xml`.
+- Replace launcher app icon using Android Studio Image Asset into `mipmap-*` (`ic_launcher`, `ic_launcher_round`).
