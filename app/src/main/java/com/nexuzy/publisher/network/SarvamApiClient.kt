@@ -15,19 +15,17 @@ import java.util.concurrent.TimeUnit
 /**
  * Sarvam AI API client.
  *
- * TWO ROLES:
+ * THREE ROLES:
  *
  * ROLE 1 — writeArticle():
  *   Backup article writer when ALL Gemini keys/models are exhausted.
- *   Uses Sarvam's sarvam-m model via /v1/chat/completions.
- *   Uses the USER'S configured Sarvam API key (from Settings).
  *
- * ROLE 2 — checkGrammarAndSpelling():
- *   Grammar & spelling correction of written articles.
- *   Runs AFTER Gemini (or Sarvam fallback) writes the article.
- *   Also uses the user's configured Sarvam API key.
+ * ROLE 2 — generateSeoData():
+ *   Backup SEO generator when Gemini SEO also fails.
+ *   Called in AiPipeline STEP 4 fallback.
  *
- * NOTE: For the David AI in-app chat, see SarvamChatClient.kt (developer key, separate).
+ * ROLE 3 — checkGrammarAndSpelling():
+ *   Grammar & spelling correction after writing.
  */
 class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
@@ -38,9 +36,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Data classes
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── Data classes ──────────────────────────────────────────────────────────
 
     data class WriteArticleResult(
         val success: Boolean,
@@ -55,23 +51,8 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         val error: String = ""
     )
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ROLE 1: Backup article writer (called when Gemini fails)
-    // ─────────────────────────────────────────────────────────────────────────
+    // ─── ROLE 1: Backup article writer ────────────────────────────────────────
 
-    /**
-     * Write a news article using Sarvam AI (sarvam-m model).
-     *
-     * Called ONLY as a fallback when all Gemini keys/models are exhausted.
-     * Uses the user's configured Sarvam API key from Settings.
-     *
-     * @param rssTitle       Original RSS headline.
-     * @param rssDescription Short RSS summary.
-     * @param rssFullContent Full scraped article body (if available). Passed to Sarvam
-     *                       for accurate rewriting — same as Gemini gets.
-     * @param category       Article category.
-     * @param maxWords       Target article length.
-     */
     suspend fun writeArticle(
         rssTitle: String,
         rssDescription: String,
@@ -80,227 +61,223 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         maxWords: Int = 800
     ): WriteArticleResult {
         val apiKey = keyManager.getSarvamKey()
-        if (apiKey.isBlank()) {
-            return WriteArticleResult(
-                false,
-                error = "Sarvam API key not configured. " +
-                        "Please add your Sarvam key in Settings to enable the backup writer."
-            )
-        }
-
+        if (apiKey.isBlank()) return WriteArticleResult(
+            false,
+            error = "Sarvam API key not configured. Add your key in Settings."
+        )
         return try {
-            Log.i("SarvamApiClient", "Gemini unavailable — writing article with Sarvam sarvam-m")
+            Log.i("SarvamClient", "[ROLE 1] Writing article as Gemini backup with sarvam-m")
             val prompt = buildArticlePrompt(rssTitle, rssDescription, rssFullContent, category, maxWords)
-            callSarvamChat(apiKey, prompt)
+            callChat(apiKey, systemPrompt = "You are a professional news journalist. Write clear, factual, engaging articles in formal English. Never invent facts.", userPrompt = prompt)
+                .let { (ok, text, err) ->
+                    if (ok) WriteArticleResult(true, text)
+                    else WriteArticleResult(false, error = err)
+                }
         } catch (e: Exception) {
-            Log.e("SarvamApiClient", "writeArticle error: ${e.message}")
             WriteArticleResult(false, error = e.message ?: "Sarvam write error")
         }
     }
 
-    private fun callSarvamChat(apiKey: String, prompt: String): WriteArticleResult {
+    // ─── ROLE 2: Backup SEO generator ─────────────────────────────────────────
+
+    /**
+     * Generate SEO metadata using sarvam-m when Gemini SEO fails.
+     * Returns the same GeminiApiClient.SeoData type for pipeline compatibility.
+     */
+    fun generateSeoData(
+        title: String,
+        articleContent: String,
+        category: String
+    ): GeminiApiClient.SeoData {
+        val apiKey = keyManager.getSarvamKey()
+        if (apiKey.isBlank()) return GeminiApiClient.SeoData(false, error = "Sarvam key not set")
+
+        return try {
+            Log.i("SarvamClient", "[ROLE 2] Generating SEO with sarvam-m backup")
+            val prompt = """
+                You are an SEO expert. Analyze this news article and generate SEO metadata.
+
+                Article Title: $title
+                Category: $category
+                Article (first 800 chars): ${articleContent.take(800)}
+
+                Respond ONLY in this exact JSON format (no extra text, no markdown):
+                {
+                  "tags": ["tag1","tag2","tag3","tag4","tag5"],
+                  "meta_keywords": "keyword1, keyword2, keyword3, keyword4, keyword5",
+                  "focus_keyphrase": "main focus keyphrase here",
+                  "meta_description": "Compelling 120-155 character meta description."
+                }
+            """.trimIndent()
+
+            val (ok, text, err) = callChatSync(
+                apiKey,
+                systemPrompt = "You are an SEO expert. Always respond with valid JSON only.",
+                userPrompt   = prompt
+            )
+
+            if (!ok || text.isBlank()) return GeminiApiClient.SeoData(false, error = "Sarvam SEO error: $err")
+
+            parseSeoJson(text)
+        } catch (e: Exception) {
+            Log.e("SarvamClient", "generateSeoData error: ${e.message}")
+            GeminiApiClient.SeoData(false, error = e.message ?: "SEO error")
+        }
+    }
+
+    private fun parseSeoJson(raw: String): GeminiApiClient.SeoData {
+        return try {
+            val cleaned = raw.trim()
+                .removePrefix("```json").removePrefix("```")
+                .removeSuffix("```").trim()
+            val json = JsonParser.parseString(cleaned).asJsonObject
+            val arr  = json.getAsJsonArray("tags")
+            val tags = (0 until arr.size()).map { arr[it].asString }
+            GeminiApiClient.SeoData(
+                success         = true,
+                tags            = tags,
+                metaKeywords    = json.get("meta_keywords")?.asString  ?: tags.joinToString(", "),
+                focusKeyphrase  = json.get("focus_keyphrase")?.asString ?: "",
+                metaDescription = json.get("meta_description")?.asString ?: ""
+            )
+        } catch (e: Exception) {
+            Log.e("SarvamClient", "parseSeoJson error: ${e.message} | raw=$raw")
+            GeminiApiClient.SeoData(false, error = "SEO parse failed: ${e.message}")
+        }
+    }
+
+    // ─── ROLE 3: Grammar & spelling ───────────────────────────────────────────
+
+    suspend fun checkGrammarAndSpelling(content: String): GrammarCheckResult {
+        val apiKey = keyManager.getSarvamKey()
+        if (apiKey.isBlank()) return GrammarCheckResult(
+            true, content, error = "Sarvam key not set; grammar check skipped"
+        )
+        return try {
+            val chunks = splitIntoChunks(content, 2000)
+            val corrected = mutableListOf<String>()
+            for (chunk in chunks) {
+                val result = callSarvamTranslate(apiKey, chunk)
+                corrected.add(if (result.success) result.correctedText else chunk)
+            }
+            GrammarCheckResult(true, corrected.joinToString(" "))
+        } catch (e: Exception) {
+            GrammarCheckResult(false, content, error = e.message ?: "Error")
+        }
+    }
+
+    // ─── Shared chat call ─────────────────────────────────────────────────────
+
+    /** Returns Triple(success, content, error) */
+    private fun callChatSync(
+        apiKey: String,
+        systemPrompt: String,
+        userPrompt: String
+    ): Triple<Boolean, String, String> {
         return try {
             val messages = JsonArray().apply {
-                // System role
-                add(JsonObject().apply {
-                    addProperty("role", "system")
-                    addProperty(
-                        "content",
-                        "You are a professional news journalist. Write clear, factual, " +
-                        "engaging news articles in formal English. Never invent facts."
-                    )
-                })
-                // User prompt with article facts
-                add(JsonObject().apply {
-                    addProperty("role", "user")
-                    addProperty("content", prompt)
-                })
+                add(JsonObject().apply { addProperty("role", "system"); addProperty("content", systemPrompt) })
+                add(JsonObject().apply { addProperty("role", "user");   addProperty("content", userPrompt)   })
             }
-
             val body = JsonObject().apply {
-                addProperty("model", "sarvam-m")
-                add("messages", messages)
+                addProperty("model",       "sarvam-m")
+                add("messages",            messages)
                 addProperty("temperature", 0.7)
-                addProperty("max_tokens", 2048)
+                addProperty("max_tokens",  2048)
             }
-
-            val request = Request.Builder()
-                .url("https://api.sarvam.ai/v1/chat/completions")
-                .addHeader("api-subscription-key", apiKey)
-                .addHeader("Content-Type", "application/json")
-                .post(body.toString().toRequestBody(jsonMedia))
-                .build()
-
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-
+            val response = client.newCall(
+                Request.Builder()
+                    .url("https://api.sarvam.ai/v1/chat/completions")
+                    .addHeader("api-subscription-key", apiKey)
+                    .addHeader("Content-Type", "application/json")
+                    .post(body.toString().toRequestBody(jsonMedia))
+                    .build()
+            ).execute()
+            val respBody = response.body?.string() ?: ""
             if (response.isSuccessful) {
-                val content = parseChatReply(responseBody)
-                if (content.isNotBlank()) {
-                    Log.i("SarvamApiClient", "Sarvam backup writer success (${content.length} chars)")
-                    WriteArticleResult(true, content)
-                } else {
-                    WriteArticleResult(false, error = "Sarvam returned empty article")
-                }
+                val content = parseChatReply(respBody)
+                if (content.isNotBlank()) Triple(true, content, "")
+                else Triple(false, "", "Empty response")
             } else {
-                Log.w("SarvamApiClient", "Sarvam write HTTP ${response.code}: $responseBody")
-                WriteArticleResult(false, error = "Sarvam HTTP ${response.code}")
+                Triple(false, "", "HTTP ${response.code}")
             }
         } catch (e: Exception) {
-            WriteArticleResult(false, error = e.message ?: "Sarvam chat error")
+            Triple(false, "", e.message ?: "Chat error")
         }
     }
 
-    private fun buildArticlePrompt(
-        title: String,
-        desc: String,
-        fullContent: String,
-        category: String,
-        maxWords: Int
-    ): String {
-        val sourceSection = if (fullContent.isNotBlank()) {
-            """
-            |--- ORIGINAL ARTICLE (scraped from source) ---
-            |${fullContent.take(3500)}
-            |----------------------------------------------
-            |
-            |Short RSS Summary: $desc
-            """.trimMargin()
-        } else {
-            "RSS Summary/Description: $desc\n(Full article not available. Write from title and summary.)"
-        }
-
-        return """
-            Write a complete professional news article.
-
-            Original Headline : $title
-            Category          : $category
-            Target length     : approximately $maxWords words
-
-            $sourceSection
-
-            Requirements:
-            - Strong lead paragraph (who, what, when, where, why)
-            - Objective, professional journalistic tone
-            - Rewrite in your own words — do NOT copy verbatim
-            - Do NOT add quotes or statistics not present in the source
-            - Write a new SEO-friendly headline first, then the article body
-            - Use ONLY facts from the source provided above
-
-            Write the complete article now (headline first, then body):
-        """.trimIndent()
-    }
+    private suspend fun callChat(
+        apiKey: String,
+        systemPrompt: String,
+        userPrompt: String
+    ): Triple<Boolean, String, String> = callChatSync(apiKey, systemPrompt, userPrompt)
 
     private fun parseChatReply(responseBody: String): String {
         return try {
             JsonParser.parseString(responseBody).asJsonObject
-                .getAsJsonArray("choices")[0]
-                .asJsonObject
+                .getAsJsonArray("choices")[0].asJsonObject
                 .getAsJsonObject("message")
                 .get("content").asString.trim()
-        } catch (e: Exception) {
-            Log.e("SarvamApiClient", "Chat reply parse error: ${e.message}")
-            ""
-        }
+        } catch (e: Exception) { "" }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // ROLE 2: Grammar & spelling correction
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Check and correct grammar/spelling in the written article.
-     * Uses Sarvam AI translate API (en-IN formal mode).
-     * Called after article is written (by Gemini OR Sarvam backup writer).
-     */
-    suspend fun checkGrammarAndSpelling(content: String): GrammarCheckResult {
-        val apiKey = keyManager.getSarvamKey()
-        if (apiKey.isBlank()) {
-            return GrammarCheckResult(
-                success = true,
-                correctedText = content,
-                error = "Sarvam key not set; grammar check skipped"
-            )
-        }
-
-        return try {
-            val chunks = splitIntoChunks(content, 2000)
-            val correctedChunks = mutableListOf<String>()
-            val allIssues = mutableListOf<String>()
-
-            for (chunk in chunks) {
-                val result = callSarvamTranslate(apiKey, chunk)
-                if (result.success) {
-                    correctedChunks.add(result.correctedText)
-                    allIssues.addAll(result.issuesFound)
-                } else {
-                    correctedChunks.add(chunk)
-                    Log.w("SarvamApiClient", "Grammar check failed for chunk: ${result.error}")
-                }
-            }
-
-            GrammarCheckResult(
-                success = true,
-                correctedText = correctedChunks.joinToString(" "),
-                issuesFound = allIssues
-            )
-        } catch (e: Exception) {
-            Log.e("SarvamApiClient", "checkGrammarAndSpelling error: ${e.message}")
-            GrammarCheckResult(false, content, emptyList(), e.message ?: "Error")
-        }
+    private fun buildArticlePrompt(
+        title: String, desc: String, full: String, category: String, maxWords: Int
+    ): String {
+        val source = if (full.isNotBlank())
+            "--- ORIGINAL ARTICLE ---\n${full.take(3500)}\n---\nSummary: $desc"
+        else "Summary: $desc"
+        return """
+            Write a complete professional news article.
+            Headline : $title
+            Category : $category
+            Target   : ~$maxWords words
+            $source
+            Requirements: strong lead, formal tone, rewrite in own words, new SEO headline first.
+        """.trimIndent()
     }
 
     private fun callSarvamTranslate(apiKey: String, text: String): GrammarCheckResult {
         return try {
-            val escapedText = JsonPrimitive(text).toString()
-            val requestBody = """
-                {
-                  "input": $escapedText,
-                  "source_language_code": "en-IN",
-                  "target_language_code": "en-IN",
-                  "speaker_gender": "Male",
-                  "mode": "formal",
-                  "model": "mayura:v1",
-                  "enable_preprocessing": true
-                }
-            """.trimIndent()
-
-            val request = Request.Builder()
-                .url("https://api.sarvam.ai/translate")
-                .addHeader("api-subscription-key", apiKey)
-                .addHeader("Content-Type", "application/json")
-                .post(requestBody.toRequestBody(jsonMedia))
-                .build()
-
-            val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: ""
-
-            if (response.isSuccessful) {
-                val json = JsonParser.parseString(body).asJsonObject
-                val translated = json.get("translated_text")?.asString ?: text
-                GrammarCheckResult(true, translated.ifBlank { text })
-            } else {
-                Log.w("SarvamApiClient", "Translate HTTP ${response.code}: $body")
-                GrammarCheckResult(false, text, error = "HTTP ${response.code}")
+            val body = JsonObject().apply {
+                addProperty("input", text)
+                addProperty("source_language_code", "en-IN")
+                addProperty("target_language_code", "en-IN")
+                addProperty("speaker_gender", "Male")
+                addProperty("mode", "formal")
+                addProperty("model", "mayura:v1")
+                addProperty("enable_preprocessing", true)
             }
+            val resp = client.newCall(
+                Request.Builder()
+                    .url("https://api.sarvam.ai/translate")
+                    .addHeader("api-subscription-key", apiKey)
+                    .addHeader("Content-Type", "application/json")
+                    .post(body.toString().toRequestBody(jsonMedia))
+                    .build()
+            ).execute()
+            val rb = resp.body?.string() ?: ""
+            if (resp.isSuccessful) {
+                val translated = JsonParser.parseString(rb).asJsonObject.get("translated_text")?.asString ?: text
+                GrammarCheckResult(true, translated.ifBlank { text })
+            } else GrammarCheckResult(false, text, error = "HTTP ${resp.code}")
         } catch (e: Exception) {
             GrammarCheckResult(false, text, error = e.message ?: "Error")
         }
     }
 
-    private fun splitIntoChunks(text: String, chunkSize: Int): List<String> {
-        if (text.length <= chunkSize) return listOf(text)
+    private fun splitIntoChunks(text: String, size: Int): List<String> {
+        if (text.length <= size) return listOf(text)
         val chunks = mutableListOf<String>()
-        val sentences = text.split(". ")
-        val current = StringBuilder()
-        for (sentence in sentences) {
-            if (current.length + sentence.length > chunkSize) {
-                if (current.isNotEmpty()) chunks.add(current.toString())
-                current.clear()
+        val buf = StringBuilder()
+        for (sentence in text.split(". ")) {
+            if (buf.length + sentence.length > size) {
+                if (buf.isNotEmpty()) chunks.add(buf.toString())
+                buf.clear()
             }
-            current.append(sentence).append(". ")
+            buf.append(sentence).append(". ")
         }
-        if (current.isNotEmpty()) chunks.add(current.toString())
+        if (buf.isNotEmpty()) chunks.add(buf.toString())
         return chunks
     }
 }

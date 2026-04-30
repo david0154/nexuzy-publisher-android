@@ -8,6 +8,8 @@ import com.google.gson.JsonParser
 import com.nexuzy.publisher.data.model.Article
 import com.nexuzy.publisher.data.model.NewsCategory
 import com.nexuzy.publisher.data.model.WordPressSite
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
@@ -17,18 +19,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 import java.util.concurrent.TimeUnit
 
-/**
- * WordPress REST API client.
- *
- * Category push strategy:
- *   - Uses NewsCategory.getCategoryChain() to resolve parent + child categories.
- *   - Example: article.category = "AI & Machine Learning"
- *     → WordPress gets IDs for ["Technology", "AI & Machine Learning"]
- *   - Falls back to NewsCategory.detectCategory() when article.category is blank.
- *   - Each category is resolved against the live WP site; created if missing.
- *
- * Maintained by: David | Nexuzy Lab
- */
 class WordPressApiClient {
 
     private val client = OkHttpClient.Builder()
@@ -39,6 +29,8 @@ class WordPressApiClient {
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
+    // ─── Data classes ──────────────────────────────────────────────────────────
+
     data class PublishResult(
         val success: Boolean,
         val postId: Long = 0,
@@ -47,74 +39,168 @@ class WordPressApiClient {
     )
 
     /**
+     * A WordPress category as returned by /wp-json/wp/v2/categories.
+     */
+    data class WpCategory(
+        val id: Long,
+        val name: String,
+        val slug: String,
+        val parentId: Long = 0,
+        val count: Int = 0
+    )
+
+    // ─── Fetch all WordPress categories ───────────────────────────────────────
+
+    /**
+     * Fetches ALL categories from the WordPress site.
+     * Used to populate the category spinner when adding an RSS feed,
+     * and to validate category before pushing an article.
+     *
+     * Paginates automatically (100 per page) so large sites return everything.
+     */
+    suspend fun fetchCategories(site: WordPressSite): List<WpCategory> =
+        withContext(Dispatchers.IO) {
+            val siteUrl = site.siteUrl.trimEnd('/')
+            val auth    = buildAuthHeader(site)
+            val all     = mutableListOf<WpCategory>()
+            var page    = 1
+
+            while (true) {
+                try {
+                    val request = Request.Builder()
+                        .url("$siteUrl/wp-json/wp/v2/categories?per_page=100&page=$page&orderby=name&order=asc")
+                        .addHeader("Authorization", auth)
+                        .build()
+                    val response = client.newCall(request).execute()
+                    val body     = response.body?.string() ?: "[]"
+                    if (!response.isSuccessful) break
+
+                    val arr = JsonParser.parseString(body).asJsonArray
+                    if (arr.size() == 0) break
+
+                    for (i in 0 until arr.size()) {
+                        val obj = arr[i].asJsonObject
+                        all.add(
+                            WpCategory(
+                                id       = obj.get("id")?.asLong  ?: 0,
+                                name     = obj.getAsJsonObject("name")?.asString
+                                             ?: obj.get("name")?.asString ?: "",
+                                slug     = obj.get("slug")?.asString   ?: "",
+                                parentId = obj.get("parent")?.asLong   ?: 0,
+                                count    = obj.get("count")?.asInt      ?: 0
+                            )
+                        )
+                    }
+                    // If fewer than 100 returned, we've reached the last page
+                    if (arr.size() < 100) break
+                    page++
+                } catch (e: Exception) {
+                    Log.w("WPClient", "fetchCategories page $page error: ${e.message}")
+                    break
+                }
+            }
+            Log.i("WPClient", "Fetched ${all.size} categories from ${site.siteUrl}")
+            all
+        }
+
+    // ─── Publish post (category-validated) ───────────────────────────────────
+
+    /**
      * Full publish flow:
-     * 1. Detect / resolve category chain (parent + child)
-     * 2. Resolve or create tag IDs
-     * 3. Upload featured image if local path exists
-     * 4. Publish post with SEO meta (Yoast + RankMath compatible)
+     * 1. Validate article category exists on WordPress site (skip push if not found).
+     * 2. Resolve / create tag IDs.
+     * 3. Upload featured image (local file → media library).
+     *    If local file missing, download from imageUrl and upload.
+     * 4. Publish draft with full SEO meta.
+     *
+     * Category-push rule:
+     *   - Only push if article.category matches an existing WP category.
+     *   - If category is absent on WP, return PublishResult with skipReason.
+     *   - Set allowCategoryCreate = true to create missing categories automatically.
      */
     suspend fun publishPost(
         site: WordPressSite,
         article: Article,
         status: String = "draft",
-        adsCode: String = ""
-    ): PublishResult {
-        return try {
+        adsCode: String = "",
+        allowCategoryCreate: Boolean = true
+    ): PublishResult = withContext(Dispatchers.IO) {
+        try {
             val siteUrl = site.siteUrl.trimEnd('/')
-            val auth = buildAuthHeader(site)
+            val auth    = buildAuthHeader(site)
 
-            // Step 1 — Resolve category chain (parent + child) → list of IDs
+            // Step 1 — Resolve category (validate or create)
             val effectiveCategory = article.category.ifBlank {
                 NewsCategory.detectCategory(article.title, article.summary)
             }
-            val categoryChain = NewsCategory.getCategoryChain(effectiveCategory)
-            Log.d("WPClient", "Category chain for '$effectiveCategory': $categoryChain")
-            val categoryIds = resolveCategoryIds(siteUrl, auth, categoryChain)
+
+            val categoryIds: List<Long>
+            if (!allowCategoryCreate) {
+                // Strict mode: only push if category EXISTS on WordPress
+                val wpCategories = fetchCategoriesRaw(siteUrl, auth)
+                val matched = wpCategories.filter {
+                    it.name.equals(effectiveCategory.trim(), ignoreCase = true) ||
+                    it.slug.equals(
+                        effectiveCategory.trim().lowercase().replace(" ", "-"),
+                        ignoreCase = true
+                    )
+                }
+                if (matched.isEmpty()) {
+                    Log.w("WPClient", "Category '$effectiveCategory' not found on WP, skipping push")
+                    return@withContext PublishResult(
+                        false,
+                        error = "CATEGORY_NOT_FOUND:$effectiveCategory"
+                    )
+                }
+                categoryIds = matched.map { it.id }
+            } else {
+                // Default: create category if missing (original behaviour)
+                val chain = NewsCategory.getCategoryChain(effectiveCategory)
+                categoryIds = resolveCategoryIds(siteUrl, auth, chain)
+            }
 
             // Step 2 — Resolve / create tag IDs
             val tagIds = resolveTagIds(siteUrl, auth, article.tags)
 
-            // Step 3 — Upload featured image if we have a local file
-            val featuredMediaId = if (article.imagePath.isNotBlank()) {
-                uploadFeaturedImage(siteUrl, auth, article.imagePath, article.title)
-            } else 0L
+            // Step 3 — Upload featured image
+            //   Priority: local file → remote URL → no image
+            val featuredMediaId = when {
+                article.imagePath.isNotBlank() && File(article.imagePath).exists() ->
+                    uploadFeaturedImage(siteUrl, auth, article.imagePath, article.title)
+                article.imageUrl.isNotBlank() ->
+                    uploadFeaturedImageFromUrl(siteUrl, auth, article.imageUrl, article.title)
+                else -> 0L
+            }
 
-            // Step 4 — Build post body
+            // Step 4 — Build and send post
             val postBody = JsonObject().apply {
-                addProperty("title", article.title)
+                addProperty("title",   article.title)
                 addProperty("content", withAdsCode(article.content, adsCode))
                 addProperty("excerpt", article.metaDescription.ifBlank { article.summary })
-                addProperty("status", status)
+                addProperty("status",  status)
 
-                // Assign ALL resolved category IDs (parent + child)
                 if (categoryIds.isNotEmpty()) {
-                    val catsArr = JsonArray()
-                    categoryIds.forEach { catsArr.add(it) }
-                    add("categories", catsArr)
+                    add("categories", JsonArray().also { arr ->
+                        categoryIds.forEach { arr.add(it) }
+                    })
                 }
-
                 if (tagIds.isNotEmpty()) {
-                    val tagsArr = JsonArray()
-                    tagIds.forEach { tagsArr.add(it) }
-                    add("tags", tagsArr)
+                    add("tags", JsonArray().also { arr ->
+                        tagIds.forEach { arr.add(it) }
+                    })
                 }
                 if (featuredMediaId > 0) addProperty("featured_media", featuredMediaId)
 
-                // SEO meta fields — Yoast + RankMath + generic
-                val meta = JsonObject().apply {
-                    // Yoast SEO
-                    addProperty("_yoast_wpseo_title",    article.title)
-                    addProperty("_yoast_wpseo_focuskw",   article.focusKeyphrase)
-                    addProperty("_yoast_wpseo_metadesc",  article.metaDescription)
-                    // RankMath SEO
-                    addProperty("rank_math_title",           article.title)
-                    addProperty("rank_math_focus_keyword",   article.focusKeyphrase)
-                    addProperty("rank_math_description",     article.metaDescription)
-                    // Nexuzy / generic
-                    addProperty("nexuzy_meta_keywords",      article.metaKeywords)
-                    addProperty("nexuzy_category",           effectiveCategory)
-                }
-                add("meta", meta)
+                add("meta", JsonObject().apply {
+                    addProperty("_yoast_wpseo_title",          article.title)
+                    addProperty("_yoast_wpseo_focuskw",        article.focusKeyphrase)
+                    addProperty("_yoast_wpseo_metadesc",       article.metaDescription)
+                    addProperty("rank_math_title",             article.title)
+                    addProperty("rank_math_focus_keyword",     article.focusKeyphrase)
+                    addProperty("rank_math_description",       article.metaDescription)
+                    addProperty("nexuzy_meta_keywords",        article.metaKeywords)
+                    addProperty("nexuzy_category",             effectiveCategory)
+                })
             }
 
             val request = Request.Builder()
@@ -124,15 +210,15 @@ class WordPressApiClient {
                 .post(postBody.toString().toRequestBody(jsonMedia))
                 .build()
 
-            val response  = client.newCall(request).execute()
-            val body      = response.body?.string() ?: ""
+            val response = client.newCall(request).execute()
+            val body     = response.body?.string() ?: ""
 
             if (response.isSuccessful) {
                 val json = JsonParser.parseString(body).asJsonObject
                 PublishResult(
-                    success  = true,
-                    postId   = json.get("id")?.asLong ?: 0,
-                    postUrl  = json.get("link")?.asString ?: ""
+                    success = true,
+                    postId  = json.get("id")?.asLong ?: 0,
+                    postUrl = json.get("link")?.asString ?: ""
                 )
             } else {
                 Log.e("WPClient", "Publish failed ${response.code}: $body")
@@ -144,108 +230,95 @@ class WordPressApiClient {
         }
     }
 
-    /**
-     * Resolves a list of category names to WordPress category IDs.
-     * For each name: searches existing categories, creates if not found.
-     * Returns the list of resolved IDs (same order as input, skips failures).
-     */
-    private fun resolveCategoryIds(siteUrl: String, auth: String, categoryNames: List<String>): List<Long> {
-        val ids = mutableListOf<Long>()
-        for (name in categoryNames) {
-            val id = resolveSingleCategoryId(siteUrl, auth, name)
-            if (id > 0) ids.add(id)
-        }
-        return ids
-    }
+    // ─── Internal helpers ─────────────────────────────────────────────────────
 
-    /**
-     * Get or create a single WordPress category by name. Returns category ID or 0 on failure.
-     */
-    private fun resolveSingleCategoryId(siteUrl: String, auth: String, categoryName: String): Long {
-        if (categoryName.isBlank()) return 0
-        return try {
-            // Search existing categories
-            val encoded = java.net.URLEncoder.encode(categoryName.trim(), "UTF-8")
-            val searchReq = Request.Builder()
-                .url("$siteUrl/wp-json/wp/v2/categories?search=$encoded&per_page=10")
-                .addHeader("Authorization", auth)
-                .build()
-            val searchResp = client.newCall(searchReq).execute()
-            val searchBody = searchResp.body?.string() ?: "[]"
-            val arr = JsonParser.parseString(searchBody).asJsonArray
-
-            // Find exact name match (case-insensitive)
-            for (i in 0 until arr.size()) {
-                val cat = arr[i].asJsonObject
-                val wpName = cat.get("name")?.asString ?: ""
-                if (wpName.equals(categoryName.trim(), ignoreCase = true)) {
-                    val id = cat.get("id")?.asLong ?: 0
-                    Log.d("WPClient", "Category found: '$categoryName' → ID $id")
-                    return id
+    private fun fetchCategoriesRaw(siteUrl: String, auth: String): List<WpCategory> {
+        val all  = mutableListOf<WpCategory>()
+        var page = 1
+        while (true) {
+            try {
+                val resp = client.newCall(
+                    Request.Builder()
+                        .url("$siteUrl/wp-json/wp/v2/categories?per_page=100&page=$page")
+                        .addHeader("Authorization", auth)
+                        .build()
+                ).execute()
+                val arr = JsonParser.parseString(resp.body?.string() ?: "[]").asJsonArray
+                if (arr.size() == 0) break
+                for (i in 0 until arr.size()) {
+                    val obj = arr[i].asJsonObject
+                    all.add(WpCategory(
+                        id   = obj.get("id")?.asLong ?: 0,
+                        name = obj.get("name")?.asString ?: "",
+                        slug = obj.get("slug")?.asString ?: ""
+                    ))
                 }
-            }
-
-            // Not found — create it
-            Log.d("WPClient", "Category '$categoryName' not found, creating…")
-            val createBody = JsonObject().apply { addProperty("name", categoryName) }
-            val createReq = Request.Builder()
-                .url("$siteUrl/wp-json/wp/v2/categories")
-                .addHeader("Authorization", auth)
-                .addHeader("Content-Type", "application/json")
-                .post(createBody.toString().toRequestBody(jsonMedia))
-                .build()
-            val createResp = client.newCall(createReq).execute()
-            val createRespBody = createResp.body?.string() ?: "{}"
-            val newId = JsonParser.parseString(createRespBody).asJsonObject.get("id")?.asLong ?: 0
-            Log.d("WPClient", "Category '$categoryName' created → ID $newId")
-            newId
-        } catch (e: Exception) {
-            Log.w("WPClient", "Category resolve failed for '$categoryName': ${e.message}")
-            0
+                if (arr.size() < 100) break
+                page++
+            } catch (e: Exception) { break }
         }
+        return all
     }
 
-    /**
-     * Resolve or create tag IDs from comma-separated tag string.
-     */
+    private fun resolveCategoryIds(siteUrl: String, auth: String, names: List<String>): List<Long> =
+        names.mapNotNull { resolveSingleCategoryId(siteUrl, auth, it).takeIf { id -> id > 0 } }
+
+    private fun resolveSingleCategoryId(siteUrl: String, auth: String, name: String): Long {
+        if (name.isBlank()) return 0
+        return try {
+            val enc  = java.net.URLEncoder.encode(name.trim(), "UTF-8")
+            val resp = client.newCall(
+                Request.Builder()
+                    .url("$siteUrl/wp-json/wp/v2/categories?search=$enc&per_page=10")
+                    .addHeader("Authorization", auth).build()
+            ).execute()
+            val arr = JsonParser.parseString(resp.body?.string() ?: "[]").asJsonArray
+            for (i in 0 until arr.size()) {
+                val obj = arr[i].asJsonObject
+                if ((obj.get("name")?.asString ?: "").equals(name.trim(), ignoreCase = true))
+                    return obj.get("id")?.asLong ?: 0
+            }
+            // Not found — create
+            val create = client.newCall(
+                Request.Builder()
+                    .url("$siteUrl/wp-json/wp/v2/categories")
+                    .addHeader("Authorization", auth)
+                    .addHeader("Content-Type", "application/json")
+                    .post(JsonObject().apply { addProperty("name", name) }.toString().toRequestBody(jsonMedia))
+                    .build()
+            ).execute()
+            JsonParser.parseString(create.body?.string() ?: "{}").asJsonObject.get("id")?.asLong ?: 0
+        } catch (e: Exception) { 0 }
+    }
+
     private fun resolveTagIds(siteUrl: String, auth: String, tagsRaw: String): List<Long> {
         if (tagsRaw.isBlank()) return emptyList()
-        val tagNames = tagsRaw.split(",").map { it.trim() }.filter { it.isNotBlank() }
-        val ids = mutableListOf<Long>()
-        for (tag in tagNames) {
+        return tagsRaw.split(",").map { it.trim() }.filter { it.isNotBlank() }.mapNotNull { tag ->
             try {
-                val encoded = java.net.URLEncoder.encode(tag, "UTF-8")
-                val searchReq = Request.Builder()
-                    .url("$siteUrl/wp-json/wp/v2/tags?search=$encoded&per_page=5")
-                    .addHeader("Authorization", auth)
-                    .build()
-                val resp = client.newCall(searchReq).execute()
-                val arr  = JsonParser.parseString(resp.body?.string() ?: "[]").asJsonArray
+                val enc  = java.net.URLEncoder.encode(tag, "UTF-8")
+                val resp = client.newCall(
+                    Request.Builder()
+                        .url("$siteUrl/wp-json/wp/v2/tags?search=$enc&per_page=5")
+                        .addHeader("Authorization", auth).build()
+                ).execute()
+                val arr = JsonParser.parseString(resp.body?.string() ?: "[]").asJsonArray
                 if (arr.size() > 0) {
-                    ids.add(arr[0].asJsonObject.get("id")?.asLong ?: continue)
+                    arr[0].asJsonObject.get("id")?.asLong
                 } else {
-                    val createBody = JsonObject().apply { addProperty("name", tag) }
-                    val createReq = Request.Builder()
-                        .url("$siteUrl/wp-json/wp/v2/tags")
-                        .addHeader("Authorization", auth)
-                        .addHeader("Content-Type", "application/json")
-                        .post(createBody.toString().toRequestBody(jsonMedia))
-                        .build()
-                    val createResp = client.newCall(createReq).execute()
-                    val newId = JsonParser.parseString(createResp.body?.string() ?: "{}").asJsonObject.get("id")?.asLong
-                    if (newId != null && newId > 0) ids.add(newId)
+                    val create = client.newCall(
+                        Request.Builder()
+                            .url("$siteUrl/wp-json/wp/v2/tags")
+                            .addHeader("Authorization", auth)
+                            .addHeader("Content-Type", "application/json")
+                            .post(JsonObject().apply { addProperty("name", tag) }.toString().toRequestBody(jsonMedia))
+                            .build()
+                    ).execute()
+                    JsonParser.parseString(create.body?.string() ?: "{}").asJsonObject.get("id")?.asLong
                 }
-            } catch (e: Exception) {
-                Log.w("WPClient", "Tag resolve failed for '$tag': ${e.message}")
-            }
+            } catch (e: Exception) { null }
         }
-        return ids
     }
 
-    /**
-     * Upload an image file to the WordPress media library.
-     * Returns the media attachment ID (used as featured_media).
-     */
     private fun uploadFeaturedImage(siteUrl: String, auth: String, imagePath: String, title: String): Long {
         return try {
             val file = File(imagePath)
@@ -257,29 +330,70 @@ class WordPressApiClient {
                 "gif"         -> "image/gif"
                 else          -> "image/jpeg"
             }
-            val requestBody = MultipartBody.Builder()
-                .setType(MultipartBody.FORM)
+            val rb = MultipartBody.Builder().setType(MultipartBody.FORM)
                 .addFormDataPart("file", file.name, file.asRequestBody(mimeType.toMediaType()))
                 .addFormDataPart("title", title)
                 .addFormDataPart("alt_text", title)
                 .build()
-            val request = Request.Builder()
-                .url("$siteUrl/wp-json/wp/v2/media")
-                .addHeader("Authorization", auth)
-                .post(requestBody)
+            val resp = client.newCall(
+                Request.Builder()
+                    .url("$siteUrl/wp-json/wp/v2/media")
+                    .addHeader("Authorization", auth)
+                    .post(rb).build()
+            ).execute()
+            val body = resp.body?.string() ?: "{}"
+            if (resp.isSuccessful)
+                JsonParser.parseString(body).asJsonObject.get("id")?.asLong ?: 0
+            else 0
+        } catch (e: Exception) { 0 }
+    }
+
+    /**
+     * Download an image from a URL and upload it to WordPress media library.
+     * Used when local file is not available but imageUrl is set.
+     */
+    private fun uploadFeaturedImageFromUrl(siteUrl: String, auth: String, imageUrl: String, title: String): Long {
+        return try {
+            Log.d("WPClient", "Uploading image from URL: $imageUrl")
+            // Download image bytes
+            val dlResp  = client.newCall(Request.Builder().url(imageUrl).build()).execute()
+            if (!dlResp.isSuccessful) return 0
+            val bytes   = dlResp.body?.bytes() ?: return 0
+            val mimeType = dlResp.header("Content-Type", "image/jpeg") ?: "image/jpeg"
+            val ext = when {
+                mimeType.contains("png")  -> "png"
+                mimeType.contains("webp") -> "webp"
+                mimeType.contains("gif")  -> "gif"
+                else                      -> "jpg"
+            }
+            val fileName = "nexuzy_${System.currentTimeMillis()}.$ext"
+
+            val rb = MultipartBody.Builder().setType(MultipartBody.FORM)
+                .addFormDataPart(
+                    "file", fileName,
+                    okhttp3.RequestBody.create(mimeType.toMediaType(), bytes)
+                )
+                .addFormDataPart("title", title)
+                .addFormDataPart("alt_text", title)
                 .build()
-            val response = client.newCall(request).execute()
-            val body     = response.body?.string() ?: "{}"
-            if (response.isSuccessful) {
+
+            val resp = client.newCall(
+                Request.Builder()
+                    .url("$siteUrl/wp-json/wp/v2/media")
+                    .addHeader("Authorization", auth)
+                    .post(rb).build()
+            ).execute()
+            val body = resp.body?.string() ?: "{}"
+            if (resp.isSuccessful) {
                 val id = JsonParser.parseString(body).asJsonObject.get("id")?.asLong ?: 0
-                Log.d("WPClient", "Image uploaded → media ID $id")
+                Log.i("WPClient", "Image from URL uploaded → media ID $id")
                 id
             } else {
-                Log.w("WPClient", "Image upload failed ${response.code}: $body")
+                Log.w("WPClient", "URL image upload failed ${resp.code}")
                 0
             }
         } catch (e: Exception) {
-            Log.w("WPClient", "Image upload exception: ${e.message}")
+            Log.w("WPClient", "uploadFeaturedImageFromUrl error: ${e.message}")
             0
         }
     }
@@ -290,18 +404,15 @@ class WordPressApiClient {
     suspend fun pushNewsDraftWithSeo(site: WordPressSite, article: Article, adsCode: String = ""): PublishResult =
         publishPost(site = site, article = article, status = "draft", adsCode = adsCode)
 
-    /**
-     * Test WordPress credentials by calling /users/me.
-     */
     suspend fun testConnection(site: WordPressSite): Boolean {
         return try {
-            val siteUrl = site.siteUrl.trimEnd('/')
-            val request = Request.Builder()
-                .url("$siteUrl/wp-json/wp/v2/users/me")
-                .addHeader("Authorization", buildAuthHeader(site))
-                .build()
-            val response = client.newCall(request).execute()
-            response.isSuccessful
+            val resp = client.newCall(
+                Request.Builder()
+                    .url("${site.siteUrl.trimEnd('/')}/wp-json/wp/v2/users/me")
+                    .addHeader("Authorization", buildAuthHeader(site))
+                    .build()
+            ).execute()
+            resp.isSuccessful
         } catch (e: Exception) { false }
     }
 
@@ -311,7 +422,7 @@ class WordPressApiClient {
     }
 
     private fun buildAuthHeader(site: WordPressSite): String {
-        val credentials = "${site.username}:${site.appPassword}"
-        return "Basic " + Base64.encodeToString(credentials.toByteArray(), Base64.NO_WRAP)
+        val creds = "${site.username}:${site.appPassword}"
+        return "Basic " + Base64.encodeToString(creds.toByteArray(), Base64.NO_WRAP)
     }
 }
