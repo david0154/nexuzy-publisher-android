@@ -21,6 +21,8 @@
     <!-- Status Colors -->
     <color name="success">#437a22</color>
     <color name="error">#a12c7b</color>
+    <!-- Alias used by ChatFragment AiVH for error message text -->
+    <color name="error_color">#a12c7b</color>
     <color name="warning">#964219</color>
     <color name="info">#006494</color>
 

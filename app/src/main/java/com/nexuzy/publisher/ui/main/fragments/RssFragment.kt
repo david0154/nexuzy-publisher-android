@@ -16,6 +16,7 @@ import com.nexuzy.publisher.R
 import com.nexuzy.publisher.data.db.AppDatabase
 import com.nexuzy.publisher.data.firebase.FirestoreUserRepository
 import com.nexuzy.publisher.data.model.RssFeed
+import com.nexuzy.publisher.data.model.WpCategory
 import com.nexuzy.publisher.data.model.WordPressSite
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
 import com.nexuzy.publisher.data.prefs.AppPreferences
@@ -81,7 +82,7 @@ class RssFragment : Fragment() {
                     names
                 )
                 binding.actvFeedCategory.setAdapter(autoAdapter)
-                binding.tvCategoryStatus.text = "✅ ${cats.size} WP categories loaded"
+                binding.tvCategoryStatus.text = "\u2705 ${cats.size} WP categories loaded"
                 binding.tvCategoryStatus.isVisible = true
             }
         }
@@ -95,44 +96,55 @@ class RssFragment : Fragment() {
             if (siteUrl.isBlank() || username.isBlank() || password.isBlank()) {
                 Toast.makeText(
                     requireContext(),
-                    "⚠️ Configure WordPress credentials in Settings first",
+                    "\u26a0\ufe0f Configure WordPress credentials in Settings first",
                     Toast.LENGTH_LONG
                 ).show()
                 return@setOnClickListener
             }
 
             binding.btnLoadWpCategories.isEnabled = false
-            binding.btnLoadWpCategories.text = "Loading…"
-            binding.tvCategoryStatus.text = "Fetching categories from WordPress…"
+            binding.btnLoadWpCategories.text = "Loading\u2026"
+            binding.tvCategoryStatus.text = "Fetching categories from WordPress\u2026"
             binding.tvCategoryStatus.isVisible = true
 
             viewLifecycleOwner.lifecycleScope.launch {
                 try {
                     val site = WordPressSite(
-                        name = "Default",
-                        siteUrl = siteUrl,
-                        username = username,
+                        name        = "Default",
+                        siteUrl     = siteUrl,
+                        username    = username,
                         appPassword = password
                     )
-                    val cats = withContext(Dispatchers.IO) {
-                        wpClient.fetchCategories(site)
+
+                    // Fetch from WordPressApiClient (returns WordPressApiClient.WpCategory)
+                    // then map to data.model.WpCategory so the ViewModel type is satisfied.
+                    val cats: List<WpCategory> = withContext(Dispatchers.IO) {
+                        wpClient.fetchCategories(site).map { wc ->
+                            WpCategory(
+                                id    = wc.id.toInt(),
+                                name  = wc.name,
+                                slug  = wc.slug,
+                                count = wc.count
+                            )
+                        }
                     }
+
                     newsViewModel.setWpCategories(cats)
                     binding.btnLoadWpCategories.isEnabled = true
-                    binding.btnLoadWpCategories.text = "📂 Load"
+                    binding.btnLoadWpCategories.text = "\uD83D\uDCC2 Load"
                     if (cats.isEmpty()) {
-                        binding.tvCategoryStatus.text = "⚠️ No categories found on this WP site"
+                        binding.tvCategoryStatus.text = "\u26a0\ufe0f No categories found on this WP site"
                     }
                     Toast.makeText(
                         requireContext(),
-                        "✅ ${cats.size} WordPress categories loaded",
+                        "\u2705 ${cats.size} WordPress categories loaded",
                         Toast.LENGTH_SHORT
                     ).show()
                     binding.actvFeedCategory.showDropDown()
                 } catch (e: Exception) {
                     binding.btnLoadWpCategories.isEnabled = true
-                    binding.btnLoadWpCategories.text = "📂 Load"
-                    binding.tvCategoryStatus.text = "❌ Failed: ${e.message}"
+                    binding.btnLoadWpCategories.text = "\uD83D\uDCC2 Load"
+                    binding.tvCategoryStatus.text = "\u274C Failed: ${e.message}"
                     Toast.makeText(
                         requireContext(),
                         "Failed to load categories: ${e.message}",
@@ -146,7 +158,7 @@ class RssFragment : Fragment() {
         newsViewModel.isFetching.observe(viewLifecycleOwner) { fetching ->
             binding.btnFetchLatestNews.isEnabled = !fetching
             binding.btnFetchLatestNews.text =
-                if (fetching) "Fetching…" else "Fetch Latest News"
+                if (fetching) "Fetching\u2026" else "Fetch Latest News"
         }
 
         // ── Add RSS Feed ──────────────────────────────────────────────────────
@@ -186,7 +198,7 @@ class RssFragment : Fragment() {
                 binding.actvFeedCategory.setText("")
                 Toast.makeText(
                     requireContext(),
-                    "✅ RSS feed added & synced to your account",
+                    "\u2705 RSS feed added & synced to your account",
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -216,7 +228,7 @@ class RssFragment : Fragment() {
                     } else {
                         Toast.makeText(
                             requireContext(),
-                            "\u2705 Fetched $total news | Hot: $hot | Viral: $viral — Opening Dashboard…",
+                            "\u2705 Fetched $total news | Hot: $hot | Viral: $viral \u2014 Opening Dashboard\u2026",
                             Toast.LENGTH_LONG
                         ).show()
                         findNavController().navigate(R.id.nav_dashboard)
