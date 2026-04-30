@@ -53,7 +53,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
      *   gemini-2.0-flash-lite  : 1500 RPD, 30 RPM  (higher RPM!)
      *   gemini-1.5-flash-8b    : 1500 RPD, 15 RPM
      *
-     * With 3 API keys × 4 models = up to 18 000 free requests/day.
+     * With 3 API keys × 4 models = up to 18 000 free requests/day.
      */
     private val MODEL_CHAIN = listOf(
         "gemini-2.0-flash",
@@ -62,9 +62,9 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         "gemini-1.5-flash-8b"
     )
 
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
     // Data classes
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
 
     data class GeminiResult(
         val success: Boolean,
@@ -85,13 +85,27 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         val error: String = ""
     )
 
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
     // ROLE 1: Write news article
-    // ────────────────────────────────────────────────────────────────────────
+    // NEW: accepts rssFullContent (full article body scraped from article URL)
+    // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Write a complete news article using Gemini.
+     *
+     * @param rssTitle       Original RSS headline.
+     * @param rssDescription Short RSS description/summary (1-3 sentences).
+     * @param rssFullContent Full article body scraped from the article URL (up to 4000 chars).
+     *                       When provided, Gemini uses the real article facts for rewriting.
+     *                       Falls back to rssDescription if empty.
+     * @param category       Article category (e.g. "Technology", "Business").
+     * @param model          Gemini model to use. Uses fallback chain when DEFAULT_MODEL.
+     * @param maxWords       Target article length in words.
+     */
     suspend fun writeNewsArticle(
         rssTitle: String,
         rssDescription: String,
+        rssFullContent: String = "",
         category: String,
         model: String = DEFAULT_MODEL,
         maxWords: Int = 800
@@ -106,17 +120,13 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             )
         }
 
-        val prompt = buildArticlePrompt(rssTitle, rssDescription, category, maxWords)
-        // Which models to try: if caller passed a specific model, only try that one;
-        // otherwise use the full fallback chain.
+        val prompt = buildArticlePrompt(rssTitle, rssDescription, rssFullContent, category, maxWords)
         val modelsToTry = if (model == DEFAULT_MODEL) MODEL_CHAIN else listOf(model)
 
         var lastError = ""
         var maxRetryAfter = 0
 
-        // Outer: iterate every API key
         for ((keyIndex, key) in keys.withIndex()) {
-            // Inner: try each model on this key
             for (modelName in modelsToTry) {
                 Log.d("GeminiClient", "Trying key ${keyIndex + 1}/${ keys.size}, model=$modelName")
                 val result = callGemini(key, modelName, prompt)
@@ -136,21 +146,17 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                         ", trying next model"
                     )
                     lastError = result.error
-                    continue // try next model
+                    continue
                 }
 
-                // Non-quota error (401 invalid key, network error, parse error, etc.)
-                // Return immediately — rotating keys won't help for auth errors.
                 Log.e("GeminiClient", "Non-quota error on key ${keyIndex + 1} / $modelName: ${result.error}")
                 return@withContext result.copy(keyUsed = keyIndex + 1, modelUsed = modelName)
             }
 
-            // All models exhausted for this key — rotate to next
             Log.w("GeminiClient", "Key ${keyIndex + 1}: all ${modelsToTry.size} models quota exceeded, trying next key")
             keyManager.rotateGeminiKey()
         }
 
-        // All keys × all models exhausted
         val retryMsg = if (maxRetryAfter > 0)
             " Gemini resets in about ${maxRetryAfter}s — please wait and try again."
         else
@@ -163,9 +169,9 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         )
     }
 
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
     // ROLE 2: Generate SEO metadata from article
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
 
     suspend fun generateSeoData(
         title: String,
@@ -194,9 +200,9 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         return@withContext SeoData(false, error = "All Gemini keys exhausted for SEO generation.")
     }
 
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
     // Internal: HTTP call (blocking — must be called from Dispatchers.IO)
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun callGemini(apiKey: String, model: String, prompt: String): GeminiResult {
         return try {
@@ -221,38 +227,67 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         }
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    // Retry delay parser
-    // Gemini 429 body contains: "Please retry in 57.870850784s."
-    // ────────────────────────────────────────────────────────────────────────
-
     private fun parseRetryDelay(error: String): Int {
         val pattern = Regex("""[Rr]etry(?:\s+in)?\s+(\d+)(?:\.\d+)?\s*s""", RegexOption.IGNORE_CASE)
         return pattern.find(error)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
     }
 
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
     // Prompt builders
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
 
-    private fun buildArticlePrompt(title: String, desc: String, category: String, maxWords: Int) = """
-        You are a professional news journalist. Write a complete, factual, engaging news article.
+    /**
+     * Build the article writing prompt.
+     *
+     * When rssFullContent is available (scraped from the article URL), Gemini sees the
+     * complete original article and can rewrite it accurately with full context.
+     * When only rssDescription is available (RSS-only fallback), Gemini gets the summary only.
+     */
+    private fun buildArticlePrompt(
+        title: String,
+        desc: String,
+        fullContent: String,
+        category: String,
+        maxWords: Int
+    ): String {
+        val sourceSection = if (fullContent.isNotBlank()) {
+            """
+            |─── ORIGINAL ARTICLE (scraped from source) ───────────────────────
+            |${fullContent.take(3500)}
+            |──────────────────────────────────────────────────────────────────
+            |
+            |Short RSS Summary (for context): $desc
+            """.trimMargin()
+        } else {
+            """
+            |RSS Summary/Description: $desc
+            |(Note: Full article not available. Write based on title and summary only.)
+            """.trimMargin()
+        }
 
-        Original Headline: $title
-        Summary/Description: $desc
-        Category: $category
+        return """
+            You are a professional news journalist. Write a complete, factual, engaging news article.
 
-        Requirements:
-        - Write approximately $maxWords words
-        - Strong lead paragraph (who, what, when, where, why)
-        - Objective journalistic tone
-        - Add context and background
-        - End with implications or outlook
-        - Do NOT add fake quotes
-        - Only use facts from the provided information
+            Original Headline : $title
+            Category          : $category
+            Target length     : approximately $maxWords words
 
-        Write the complete article now:
-    """.trimIndent()
+            $sourceSection
+
+            Writing requirements:
+            - Create a strong lead paragraph (who, what, when, where, why)
+            - Objective, professional journalistic tone
+            - Add relevant context and background using the source material above
+            - End with implications, reactions, or outlook
+            - Rewrite in your own words — do NOT copy the original verbatim
+            - Do NOT add quotes that are not present in the source
+            - Do NOT invent statistics or facts not in the source
+            - Write a NEW headline that is SEO-friendly
+            - Use only the facts provided in the source above
+
+            Write the complete rewritten article now (headline first, then body):
+        """.trimIndent()
+    }
 
     private fun buildSeoPrompt(title: String, content: String, category: String) = """
         You are an SEO expert. Analyze this news article and generate SEO metadata.
@@ -277,9 +312,9 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         - Respond ONLY with valid JSON, no extra text
     """.trimIndent()
 
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
     // Response parsers
-    // ────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
 
     private fun parseSeoResponse(raw: String): SeoData {
         return try {
@@ -345,7 +380,6 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         error.contains("rateLimitExceeded", ignoreCase = true)
 
     companion object {
-        /** Default model — also the first in MODEL_CHAIN. */
         const val DEFAULT_MODEL = "gemini-2.0-flash"
     }
 }
