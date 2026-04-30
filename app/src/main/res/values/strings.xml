@@ -36,12 +36,12 @@
 
     <!--
         Google Sign-In Web Client ID.
-        Replace the placeholder below with your actual OAuth 2.0 Web Client ID from
-        Google Cloud Console → APIs & Services → Credentials.
-        This is the same value that would be auto-generated in R.string.default_web_client_id
-        if google-services.json were present in the project.
+        Source: Google Cloud Console → APIs & Services → Credentials
+        Project: nexuzy-publiser-dask
+        OAuth 2.0 Client: "Web client (auto created by Google Service)"
+        Type: Web application
     -->
-    <string name="google_web_client_id">YOUR_WEB_CLIENT_ID.apps.googleusercontent.com</string>
+    <string name="google_web_client_id">886491396047-pk950ldss6cmontb6nvlduu0hhalgh8e.apps.googleusercontent.com</string>
 
     <!-- About -->
     <string name="about_developer">Developer</string>
