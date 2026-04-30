@@ -41,7 +41,7 @@
         OAuth 2.0 Client: "Web client (auto created by Google Service)"
         Type: Web application
     -->
-    <string name="google_web_client_id">886491396047-pk950ldss6cmontb6nvlduu0hhalgh8e.apps.googleusercontent.com</string>
+    <string name="google_web_client_id">886491396047-pk950ldss6cmontb6nvlduu0hhalgh8e.apps.googleusercontent.com<</string>
 
     <!-- About -->
     <string name="about_developer">Developer</string>
