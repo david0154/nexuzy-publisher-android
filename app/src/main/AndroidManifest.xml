@@ -7,8 +7,8 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/app_logo"
-        android:roundIcon="@drawable/app_logo"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:theme="@style/Theme.NexuzyPublisher"
         android:supportsRtl="true"
@@ -26,16 +26,16 @@
             </intent-filter>
         </activity>
 
-
         <activity
             android:name=".ui.auth.LoginActivity"
             android:exported="false"
             android:parentActivityName=".ui.splash.SplashActivity" />
 
-        <!-- Main Activity -->
+        <!-- Main Activity — NoActionBar theme required to use custom Toolbar -->
         <activity
             android:name=".ui.main.MainActivity"
             android:exported="false"
+            android:theme="@style/Theme.NexuzyPublisher.NoActionBar"
             android:windowSoftInputMode="adjustResize" />
 
         <!-- Settings Activity -->
