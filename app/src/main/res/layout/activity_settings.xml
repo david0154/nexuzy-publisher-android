@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Gemini API Keys"
+            android:textStyle="bold" />
+
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Gemini key 1">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etGeminiKey1" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:fontFamily="monospace"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Gemini key 2">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etGeminiKey2" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:fontFamily="monospace"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Gemini key 3">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etGeminiKey3" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:fontFamily="monospace"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="OpenAI API Keys"
+            android:textStyle="bold" />
+
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="OpenAI key 1">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etOpenaiKey1" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:fontFamily="monospace"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="OpenAI key 2">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etOpenaiKey2" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:fontFamily="monospace"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="OpenAI key 3">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etOpenaiKey3" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:fontFamily="monospace"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Sarvam"
+            android:textStyle="bold" />
+
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Sarvam key">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etSarvamKey" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:fontFamily="monospace"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Google Login (Optional)"
+            android:textStyle="bold" />
+
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Google Web Client ID">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etGoogleWebClientId" android:layout_width="match_parent" android:layout_height="wrap_content" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="WordPress"
+            android:textStyle="bold" />
+
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="WP URL">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etWpSiteUrl" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textUri"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="WP username">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etWpUsername" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="WP password">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etWpPassword" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" android:fontFamily="monospace"/>
+        </com.google.android.material.textfield.TextInputLayout>
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="WP ads code optional">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etWpAdsCode" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Support &amp; Privacy"
+            android:textStyle="bold" />
+
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Support email">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etSupportEmail" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textEmailAddress"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="Privacy policy URL">
+            <com.google.android.material.textfield.TextInputEditText android:id="@+id/etPrivacyPolicyUrl" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textUri"/>
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <Button android:id="@+id/btnSaveSettings" style="@style/Widget.MaterialComponents.Button" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Save Settings"/>
+    </LinearLayout>
+</ScrollView>

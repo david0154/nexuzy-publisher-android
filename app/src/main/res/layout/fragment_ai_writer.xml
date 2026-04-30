@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="AI Writer" android:textSize="22sp" android:textStyle="bold"/>
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Create a draft with Gemini, verify with OpenAI, then apply Sarvam grammar cleanup before saving or publishing." />
+    <Button android:id="@+id/btnOpenAiEditor" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Open AI Article Editor"/>
+    <Button android:id="@+id/btnOpenSettingsFromAi" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Open API Settings"/>
+</LinearLayout>

@@ -2,6 +2,7 @@ plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
     id 'com.google.devtools.ksp'
+    id 'com.google.gms.google-services'
 }
 
 android {
@@ -70,6 +71,7 @@ dependencies {
 
     // Preferences
     implementation 'androidx.preference:preference-ktx:1.2.1'
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
     // Splash Screen
     implementation 'androidx.core:core-splashscreen:1.0.1'
@@ -79,6 +81,13 @@ dependencies {
 
     // Jsoup for HTML parsing / RSS image scraping fallback
     implementation 'org.jsoup:jsoup:1.17.2'
+
+
+    // Firebase + Google login
+    implementation 'com.google.firebase:firebase-auth:23.1.0'
+    implementation 'com.google.firebase:firebase-firestore:25.1.1'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3'
+    implementation 'com.google.android.gms:play-services-auth:21.2.0'
 
     testImplementation 'junit:junit:4.13.2'
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
