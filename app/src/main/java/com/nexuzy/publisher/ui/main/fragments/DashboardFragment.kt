@@ -22,6 +22,10 @@ class DashboardFragment : Fragment() {
     private val binding get() = _binding!!
     private val newsViewModel: NewsViewModel by activityViewModels()
 
+    private lateinit var latestAdapter: NewsItemAdapter
+    private lateinit var hotAdapter: NewsItemAdapter
+    private lateinit var viralAdapter: NewsItemAdapter
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -37,21 +41,21 @@ class DashboardFragment : Fragment() {
         // --- Stats from Room DB ---
         val db = AppDatabase.getDatabase(requireContext())
         db.articleDao().getAllArticles().observe(viewLifecycleOwner) { articles ->
-            val total = articles.size
-            val drafts = articles.count { it.status.equals("draft", ignoreCase = true) }
-            val published = articles.count { it.status.equals("published", ignoreCase = true) }
-            binding.tvTotalArticles.text = "Total articles: $total"
-            binding.tvDraftArticles.text = "Drafts: $drafts"
+            val total     = articles.size
+            val drafts    = articles.count { it.status.equals("draft",      ignoreCase = true) }
+            val published = articles.count { it.status.equals("published",  ignoreCase = true) }
+            binding.tvTotalArticles.text     = "Total articles: $total"
+            binding.tvDraftArticles.text     = "Drafts: $drafts"
             binding.tvPublishedArticles.text = "Published: $published"
         }
         db.rssFeedDao().getAllFeeds().observe(viewLifecycleOwner) { feeds ->
             binding.tvTotalFeeds.text = "Configured RSS feeds: ${feeds.count { it.isActive }}"
         }
 
-        // --- News lists from shared ViewModel ---
-        val latestAdapter = NewsItemAdapter { item -> openEditor(item) }
-        val hotAdapter = NewsItemAdapter { item -> openEditor(item) }
-        val viralAdapter = NewsItemAdapter { item -> openEditor(item) }
+        // --- Adapters ---
+        latestAdapter = NewsItemAdapter { item -> openEditor(item) }
+        hotAdapter    = NewsItemAdapter { item -> openEditor(item) }
+        viralAdapter  = NewsItemAdapter { item -> openEditor(item) }
 
         binding.rvLatestNews.layoutManager =
             LinearLayoutManager(requireContext(), LinearLayoutManager.VERTICAL, false)
@@ -66,21 +70,41 @@ class DashboardFragment : Fragment() {
             LinearLayoutManager(requireContext(), LinearLayoutManager.HORIZONTAL, false)
         binding.rvViralNews.adapter = viralAdapter
 
+        // --- Observe snapshot and pass scores to adapters ---
         newsViewModel.snapshot.observe(viewLifecycleOwner) { snapshot ->
             val latestItems = snapshot.allToday.take(30)
-            val hotItems = snapshot.hotNews.map { it.item }
-            val viralItems = snapshot.potentialViral.map { it.item }
+            val hotItems    = snapshot.hotNews.map { it.item }
+            val viralItems  = snapshot.potentialViral.map { it.item }
+
+            // Build score maps from ScoredItem lists
+            val hotScoreMap   = snapshot.hotNews.associate {
+                it.item.link to (it.score * 100).toInt().coerceIn(0, 100)
+            }
+            val viralScoreMap = snapshot.potentialViral.associate {
+                it.item.link to (it.score * 100).toInt().coerceIn(0, 100)
+            }
+            val hotLinkSet   = hotItems.map { it.link }.toSet()
+            val viralLinkSet = viralItems.map { it.link }.toSet()
 
             // Empty state
             val hasNews = latestItems.isNotEmpty()
-            binding.tvNoNewsHint.isVisible = !hasNews
-            binding.sectionLatest.isVisible = hasNews
-            binding.sectionHot.isVisible = hotItems.isNotEmpty()
-            binding.sectionViral.isVisible = viralItems.isNotEmpty()
+            binding.tvNoNewsHint.isVisible    = !hasNews
+            binding.sectionLatest.isVisible   = hasNews
+            binding.sectionHot.isVisible      = hotItems.isNotEmpty()
+            binding.sectionViral.isVisible    = viralItems.isNotEmpty()
 
             latestAdapter.submitList(latestItems)
+            latestAdapter.setScores(
+                hotScoreMap + viralScoreMap,
+                hotLinkSet,
+                viralLinkSet
+            )
+
             hotAdapter.submitList(hotItems)
+            hotAdapter.setScores(hotScoreMap, hotLinkSet, viralLinkSet)
+
             viralAdapter.submitList(viralItems)
+            viralAdapter.setScores(viralScoreMap, hotLinkSet, viralLinkSet)
         }
 
         // Fetching spinner
@@ -91,11 +115,11 @@ class DashboardFragment : Fragment() {
 
     private fun openEditor(item: RssItem) {
         val intent = Intent(requireContext(), ArticleEditorActivity::class.java).apply {
-            putExtra("rss_item", item)
-            putExtra("rss_title", item.title)
+            putExtra("rss_item",        item)
+            putExtra("rss_title",       item.title)
             putExtra("rss_description", item.description)
-            putExtra("rss_link", item.link)
-            putExtra("rss_category", item.feedCategory)
+            putExtra("rss_link",        item.link)
+            putExtra("rss_category",    item.feedCategory)
         }
         startActivity(intent)
     }

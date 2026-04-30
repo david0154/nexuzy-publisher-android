@@ -41,6 +41,11 @@ class MainActivity : AppCompatActivity() {
         )
         setupActionBarWithNavController(navController, appBarConfig)
         binding.bottomNav.setupWithNavController(navController)
+
+        // ── AI Chat FAB — opens DavidAiChatActivity from any tab ─────────────
+        binding.fabAiChat.setOnClickListener {
+            startActivity(Intent(this, DavidAiChatActivity::class.java))
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {

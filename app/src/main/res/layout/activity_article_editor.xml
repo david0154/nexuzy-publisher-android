@@ -43,23 +43,72 @@
                 android:minLines="8"/>
         </com.google.android.material.textfield.TextInputLayout>
 
-        <!-- Image status banner — shown when RSS image is found or downloaded -->
+        <!-- ═══ Featured Image Section ═══ -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="📷 Featured Image"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:layout_marginTop="12dp"
+            android:layout_marginBottom="6dp" />
+
+        <!-- Image Preview -->
+        <ImageView
+            android:id="@+id/ivArticleImage"
+            android:layout_width="match_parent"
+            android:layout_height="180dp"
+            android:scaleType="centerCrop"
+            android:background="#F0F0F0"
+            android:contentDescription="Article featured image"
+            android:visibility="gone" />
+
+        <!-- Image action buttons -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="6dp">
+
+            <Button
+                android:id="@+id/btnUseRssImage"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:text="Use RSS Image" />
+
+            <Button
+                android:id="@+id/btnPickGalleryImage"
+                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="Pick from Gallery" />
+
+        </LinearLayout>
+
+        <!-- Image status banner -->
         <TextView
             android:id="@+id/tvImageStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="4dp"
             android:background="#1A4CAF50"
             android:paddingHorizontal="8dp"
             android:paddingVertical="6dp"
             android:textSize="12sp"
             android:visibility="gone" />
 
+        <!-- ═══ AI Pipeline Status ═══ -->
         <LinearLayout
             android:id="@+id/progressGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:layout_marginTop="8dp">
             <TextView
                 android:id="@+id/tvPipelineStatus"
                 android:layout_width="wrap_content"

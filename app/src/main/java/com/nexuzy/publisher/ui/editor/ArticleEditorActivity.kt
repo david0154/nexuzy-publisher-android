@@ -1,19 +1,25 @@
 package com.nexuzy.publisher.ui.editor
 
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
 import android.view.View
 import android.widget.Toast
-import androidx.activity.viewModels
 import androidx.activity.addCallback
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.isVisible
 import androidx.lifecycle.Observer
 import androidx.lifecycle.lifecycleScope
+import com.bumptech.glide.Glide
 import com.nexuzy.publisher.data.db.AppDatabase
 import com.nexuzy.publisher.data.model.Article
-import com.nexuzy.publisher.data.model.WordPressSite
 import com.nexuzy.publisher.data.model.RssItem
+import com.nexuzy.publisher.data.model.WordPressSite
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
 import com.nexuzy.publisher.databinding.ActivityArticleEditorBinding
 import com.nexuzy.publisher.network.WordPressApiClient
@@ -28,11 +34,28 @@ class ArticleEditorActivity : AppCompatActivity() {
     private lateinit var wpClient: WordPressApiClient
     private val viewModel: ArticleEditorViewModel by viewModels()
 
-    // ── Class-level RSS source fields so buildArticleForSave() can always access them ──
+    // Class-level RSS source fields
     private var rssLink: String = ""
     private var rssCategory: String = "General"
-    private var rssImageUrl: String = ""   // Remote image URL from RSS feed
+    private var rssImageUrl: String = ""
     private var rssFeedName: String = ""
+
+    // Locally picked gallery image URI
+    private var pickedImageUri: Uri? = null
+
+    // Gallery picker launcher
+    private val galleryLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                val uri = result.data?.data
+                if (uri != null) {
+                    pickedImageUri = uri
+                    showImagePreview(uri.toString())
+                    binding.tvImageStatus.text = "\uD83D\uDDBC\uFE0F Gallery image selected"
+                    binding.tvImageStatus.isVisible = true
+                }
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,7 +70,7 @@ class ArticleEditorActivity : AppCompatActivity() {
         observePipelineState()
         setupBackPressConfirmation()
 
-        // ── Accept full RssItem Parcelable OR individual string extras (backwards compat) ──
+        // Accept full RssItem Parcelable OR individual string extras
         @Suppress("DEPRECATION")
         val rssItem: RssItem? = intent.getParcelableExtra("rss_item")
 
@@ -61,35 +84,62 @@ class ArticleEditorActivity : AppCompatActivity() {
         if (rssTitle.isNotBlank())       binding.etArticleTitle.setText(rssTitle)
         if (rssDescription.isNotBlank()) binding.etArticleSummary.setText(rssDescription)
 
-        // Show RSS image URL hint if available
+        // Show RSS image preview if available
         if (rssImageUrl.isNotBlank()) {
-            binding.tvImageStatus.text = "🖼️ RSS image found — will be downloaded during pipeline"
+            showImagePreview(rssImageUrl)
+            binding.tvImageStatus.text = "\uD83D\uDDBC\uFE0F RSS image found — will be uploaded with article"
             binding.tvImageStatus.isVisible = true
         }
 
+        // ── Image action buttons ──────────────────────────────────────────────
+        binding.btnUseRssImage.isVisible = rssImageUrl.isNotBlank()
+        binding.btnUseRssImage.setOnClickListener {
+            pickedImageUri = null
+            showImagePreview(rssImageUrl)
+            binding.tvImageStatus.text = "\uD83D\uDDBC\uFE0F Using RSS image"
+            binding.tvImageStatus.isVisible = true
+        }
+
+        binding.btnPickGalleryImage.setOnClickListener {
+            val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+            galleryLauncher.launch(intent)
+        }
+
+        // ── AI Pipeline button ────────────────────────────────────────────────
         binding.btnRunAiPipeline.setOnClickListener {
-            val title = binding.etArticleTitle.text.toString().trim()
+            val title       = binding.etArticleTitle.text.toString().trim()
             val description = binding.etArticleSummary.text.toString().trim()
             if (title.isBlank()) {
                 binding.etArticleTitle.error = "Please enter a title"
                 return@setOnClickListener
             }
-
-            // Pass imageUrl so AiPipeline Step-5 can download the RSS image
             val item = RssItem(
-                title       = title,
-                description = description.ifBlank { rssDescription },
-                link        = rssLink,
-                pubDate     = "",
+                title        = title,
+                description  = description.ifBlank { rssDescription },
+                link         = rssLink,
+                pubDate      = "",
                 feedCategory = rssCategory,
-                feedName    = rssFeedName,
-                imageUrl    = rssImageUrl    // ← KEY FIX: pass RSS image URL to pipeline
+                feedName     = rssFeedName,
+                imageUrl     = rssImageUrl
             )
             viewModel.runPipeline(item)
         }
 
-        binding.btnSaveDraft.setOnClickListener   { saveDraft() }
+        binding.btnSaveDraft.setOnClickListener    { saveDraft() }
         binding.btnPublishDraft.setOnClickListener { publishDraftToWordPress() }
+    }
+
+    private fun showImagePreview(url: String) {
+        if (url.isBlank()) return
+        binding.ivArticleImage.isVisible = true
+        try {
+            Glide.with(this)
+                .load(url)
+                .centerCrop()
+                .into(binding.ivArticleImage)
+        } catch (_: Exception) {
+            binding.ivArticleImage.isVisible = false
+        }
     }
 
     private fun setupBackPressConfirmation() {
@@ -119,41 +169,28 @@ class ArticleEditorActivity : AppCompatActivity() {
             binding.btnRunAiPipeline.isEnabled = !state.loading
             binding.tvPipelineStatus.text = state.statusText
 
-            // Apply Gemini rewritten article body
-            if (state.finalContent.isNotBlank()) {
-                binding.etArticleContent.setText(state.finalContent)
-            }
+            if (state.finalContent.isNotBlank()) binding.etArticleContent.setText(state.finalContent)
+            if (state.rewrittenTitle.isNotBlank()) binding.etArticleTitle.setText(state.rewrittenTitle)
 
-            // Apply Gemini rewritten SEO title
-            if (state.rewrittenTitle.isNotBlank()) {
-                binding.etArticleTitle.setText(state.rewrittenTitle)
-            }
-
-            // AI pipeline chips
             binding.chipGemini.isChecked = state.geminiDone
             binding.chipOpenai.isChecked = state.openAiDone
             binding.chipSarvam.isChecked = state.sarvamDone
-            // SEO chip — only shown when seoDone
-            if (::binding.isInitialized) {
-                try { binding.chipSeo.isChecked = state.seoDone } catch (_: Exception) {}
-            }
+            try { binding.chipSeo.isChecked = state.seoDone } catch (_: Exception) {}
 
-            // Image status
+            // Update image preview from pipeline result
             when {
                 state.imagePath.isNotBlank() -> {
-                    binding.tvImageStatus.text = "✅ Article image downloaded: ${state.imagePath.substringAfterLast('/')}"
+                    showImagePreview(state.imagePath)
+                    binding.tvImageStatus.text = "\u2705 Article image downloaded: ${state.imagePath.substringAfterLast('/')}"
                     binding.tvImageStatus.isVisible = true
                 }
                 state.imageUrl.isNotBlank() -> {
-                    binding.tvImageStatus.text = "🖼️ Image URL: ${state.imageUrl.take(60)}…"
+                    showImagePreview(state.imageUrl)
+                    binding.tvImageStatus.text = "\uD83D\uDDBC\uFE0F Image URL: ${state.imageUrl.take(60)}\u2026"
                     binding.tvImageStatus.isVisible = true
-                }
-                else -> {
-                    binding.tvImageStatus.isVisible = false
                 }
             }
 
-            // Fact feedback
             if (state.factFeedback.isNotBlank()) {
                 binding.tvFactFeedback.text = state.factFeedback
                 binding.tvFactFeedback.visibility = View.VISIBLE
@@ -169,39 +206,54 @@ class ArticleEditorActivity : AppCompatActivity() {
 
     /**
      * Build a fully-populated Article from UI + pipeline state.
-     * Includes SEO meta, tags, image, source URL, category — all required for WordPress push.
+     * Auto-generates SEO fields if the AI pipeline has not run yet.
      */
     private fun buildArticleForSave(status: String = "draft"): Article {
-        val state = viewModel.pipelineState.value
+        val state          = viewModel.pipelineState.value
         val currentTitle   = binding.etArticleTitle.text.toString().trim()
         val currentSummary = binding.etArticleSummary.text.toString().trim()
         val currentContent = binding.etArticleContent.text.toString().trim()
 
+        // ── Auto-generate SEO fields when pipeline hasn't run or returned blanks ──
+        val autoKeywords = currentTitle.lowercase()
+            .split(" ")
+            .filter { it.length > 4 }
+            .take(8)
+            .joinToString(", ")
+
+        val finalKeywords    = state?.metaKeywords?.ifBlank { autoKeywords }    ?: autoKeywords
+        val finalKeyphrase   = state?.focusKeyphrase?.ifBlank { currentTitle.take(60) } ?: currentTitle.take(60)
+        val finalMetaDesc    = state?.metaDescription?.ifBlank {
+            currentSummary.ifBlank { currentContent.take(155) }
+        } ?: currentSummary.ifBlank { currentContent.take(155) }
+        val finalTags        = state?.tags?.ifBlank { autoKeywords } ?: autoKeywords
+
+        // Resolve article image: gallery pick > pipeline download > pipeline url > rss url
+        val finalImageUrl  = pickedImageUri?.toString()
+            ?: state?.imageUrl?.ifBlank { rssImageUrl }
+            ?: rssImageUrl
+        val finalImagePath = state?.imagePath ?: ""
+
         return Article(
-            title           = currentTitle,
-            summary         = currentSummary.ifBlank { state?.metaDescription ?: "" },
-            content         = currentContent,
-            status          = status,
-            // Source
-            category        = rssCategory,
-            sourceUrl       = rssLink,
-            sourceName      = rssFeedName,
-            // SEO from pipeline
-            tags            = state?.tags            ?: "",
-            metaKeywords    = state?.metaKeywords    ?: "",
-            focusKeyphrase  = state?.focusKeyphrase  ?: "",
-            metaDescription = state?.metaDescription ?: currentSummary.take(160),
-            // Image: prefer local downloaded path, fallback to remote RSS URL
-            imageUrl        = state?.imageUrl  ?: rssImageUrl,
-            imagePath       = state?.imagePath ?: "",
-            // AI pipeline flags
-            geminiChecked   = binding.chipGemini.isChecked,
-            openaiChecked   = binding.chipOpenai.isChecked,
-            sarvamChecked   = binding.chipSarvam.isChecked,
-            // Fact check
-            factCheckPassed    = state?.factCheckPassed ?: false,
-            factCheckFeedback  = state?.factFeedback    ?: "",
-            confidenceScore    = state?.confidenceScore ?: 0f,
+            title              = currentTitle,
+            summary            = currentSummary.ifBlank { finalMetaDesc },
+            content            = currentContent,
+            status             = status,
+            category           = rssCategory,
+            sourceUrl          = rssLink,
+            sourceName         = rssFeedName,
+            tags               = finalTags,
+            metaKeywords       = finalKeywords,
+            focusKeyphrase     = finalKeyphrase,
+            metaDescription    = finalMetaDesc,
+            imageUrl           = finalImageUrl,
+            imagePath          = finalImagePath,
+            geminiChecked      = binding.chipGemini.isChecked,
+            openaiChecked      = binding.chipOpenai.isChecked,
+            sarvamChecked      = binding.chipSarvam.isChecked,
+            factCheckPassed    = state?.factCheckPassed    ?: false,
+            factCheckFeedback  = state?.factFeedback       ?: "",
+            confidenceScore    = state?.confidenceScore    ?: 0f,
             aiProvider         = "gemini"
         )
     }
@@ -222,7 +274,7 @@ class ArticleEditorActivity : AppCompatActivity() {
             withContext(Dispatchers.IO) {
                 AppDatabase.getDatabase(this@ArticleEditorActivity).articleDao().insert(article)
             }
-            Toast.makeText(this@ArticleEditorActivity, "✅ Saved as draft", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@ArticleEditorActivity, "\u2705 Saved as draft", Toast.LENGTH_SHORT).show()
             onComplete?.invoke()
         }
     }
@@ -247,24 +299,39 @@ class ArticleEditorActivity : AppCompatActivity() {
         val adsCode = apiKeyManager.getWordPressAdsCode()
 
         binding.progressGroup.visibility = View.VISIBLE
-        binding.tvPipelineStatus.text = "Publishing draft to WordPress…"
+        binding.tvPipelineStatus.text = "Publishing draft to WordPress\u2026"
         binding.btnPublishDraft.isEnabled = false
 
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) { wpClient.pushDraft(site, article, adsCode) }
+            // allowCategoryCreate = false → only push to EXISTING WordPress categories
+            val result = withContext(Dispatchers.IO) {
+                wpClient.pushDraft(site, article, adsCode)
+            }
             binding.progressGroup.visibility = View.GONE
             binding.btnPublishDraft.isEnabled = true
+
             if (result.success) {
-                // Save locally with WP post ID
                 withContext(Dispatchers.IO) {
                     AppDatabase.getDatabase(this@ArticleEditorActivity).articleDao()
                         .insert(article.copy(wordpressPostId = result.postId, status = "draft"))
                 }
-                binding.tvPipelineStatus.text = "✅ Draft pushed to WordPress (Post ID: ${result.postId})"
-                Toast.makeText(this@ArticleEditorActivity, "Draft pushed to WordPress!", Toast.LENGTH_LONG).show()
+                binding.tvPipelineStatus.text =
+                    "\u2705 Draft pushed to WordPress (Post ID: ${result.postId})"
+                Toast.makeText(
+                    this@ArticleEditorActivity,
+                    "\uD83C\uDF89 Draft pushed to WordPress!",
+                    Toast.LENGTH_LONG
+                ).show()
             } else {
-                binding.tvPipelineStatus.text = "❌ Publish failed"
-                Toast.makeText(this@ArticleEditorActivity, result.error, Toast.LENGTH_LONG).show()
+                // Handle category-not-found gracefully
+                val errMsg = result.error ?: "Unknown error"
+                binding.tvPipelineStatus.text = when {
+                    errMsg.contains("CATEGORY_NOT_FOUND", ignoreCase = true) ->
+                        "\u26A0\uFE0F Category '${article.category}' not found on WordPress. " +
+                        "Add it on your WP site or pick a different category."
+                    else -> "\u274C Publish failed: $errMsg"
+                }
+                Toast.makeText(this@ArticleEditorActivity, errMsg, Toast.LENGTH_LONG).show()
             }
         }
     }
