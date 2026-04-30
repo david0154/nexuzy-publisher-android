@@ -33,7 +33,12 @@
             android:screenOrientation="portrait"
             android:parentActivityName=".ui.splash.SplashActivity" />
 
-        <!-- Main Activity — base Theme.NexuzyPublisher (Light.NoActionBar) -->
+        <!--
+            Main Activity — uses base Theme.NexuzyPublisher (Light.NoActionBar).
+            The old Theme.NexuzyPublisher.NoActionBar sub-style has been removed;
+            the base theme is already NoActionBar, eliminating the
+            IllegalStateException: This Activity already has an action bar crash.
+        -->
         <activity
             android:name=".ui.main.MainActivity"
             android:exported="false"
