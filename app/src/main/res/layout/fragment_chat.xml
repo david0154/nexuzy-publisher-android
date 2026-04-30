@@ -21,7 +21,7 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="\uD83E\uDD16 AI Assistant"
+            android:text="🤖 AI Assistant"
             android:textSize="18sp"
             android:textStyle="bold"
             android:textColor="@color/white" />
@@ -32,7 +32,7 @@
         android:id="@+id/tvChatEmpty"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Ask me anything about news publishing\u2026"
+        android:text="Ask me anything about news publishing…"
         android:textColor="@color/text_hint"
         android:textSize="14sp"
         android:gravity="center"
@@ -68,10 +68,10 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="Type a message\u2026"
+            android:hint="Type a message…"
             android:textSize="14sp"
             android:textColor="@color/text_primary"
-            android:hintTextColor="@color/text_hint"
+            android:textColorHint="@color/text_hint"
             android:background="@android:color/transparent"
             android:imeOptions="actionSend"
             android:inputType="textMultiLine|textCapSentences"
@@ -86,7 +86,7 @@
             android:src="@android:drawable/ic_menu_send"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="Send message"
-            android:imageTintList="@color/primary"
+            app:tint="@color/primary"
             android:layout_marginStart="8dp" />
 
     </LinearLayout>
