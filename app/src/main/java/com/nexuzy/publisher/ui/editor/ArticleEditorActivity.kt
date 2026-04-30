@@ -40,14 +40,20 @@ class ArticleEditorActivity : AppCompatActivity() {
         observePipelineState()
         setupBackPressConfirmation()
 
-        // Pre-fill from intent if launched from RSS item
-        val rssTitle = intent.getStringExtra("rss_title") ?: ""
-        val rssDescription = intent.getStringExtra("rss_description") ?: ""
-        val rssLink = intent.getStringExtra("rss_link") ?: ""
-        val rssCategory = intent.getStringExtra("rss_category") ?: "General"
+        // ── Accept full RssItem Parcelable OR individual string extras (backwards compat) ──
+        @Suppress("DEPRECATION")
+        val rssItem: RssItem? = intent.getParcelableExtra("rss_item")
+
+        val rssTitle = rssItem?.title ?: intent.getStringExtra("rss_title") ?: ""
+        val rssDescription = rssItem?.description ?: intent.getStringExtra("rss_description") ?: ""
+        val rssLink = rssItem?.link ?: intent.getStringExtra("rss_link") ?: ""
+        val rssCategory = rssItem?.feedCategory ?: intent.getStringExtra("rss_category") ?: "General"
 
         if (rssTitle.isNotBlank()) {
             binding.etArticleTitle.setText(rssTitle)
+        }
+        if (rssDescription.isNotBlank()) {
+            binding.etArticleSummary.setText(rssDescription)
         }
 
         binding.btnRunAiPipeline.setOnClickListener {
@@ -58,23 +64,18 @@ class ArticleEditorActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            val rssItem = RssItem(
+            val item = RssItem(
                 title = title,
                 description = description.ifBlank { rssDescription },
                 link = rssLink,
                 pubDate = "",
                 feedCategory = rssCategory
             )
-            viewModel.runPipeline(rssItem)
+            viewModel.runPipeline(item)
         }
 
-        binding.btnSaveDraft.setOnClickListener {
-            saveDraft()
-        }
-
-        binding.btnPublishDraft.setOnClickListener {
-            publishDraftToWordPress()
-        }
+        binding.btnSaveDraft.setOnClickListener { saveDraft() }
+        binding.btnPublishDraft.setOnClickListener { publishDraftToWordPress() }
     }
 
     private fun setupBackPressConfirmation() {
@@ -83,28 +84,20 @@ class ArticleEditorActivity : AppCompatActivity() {
                 finish()
                 return@addCallback
             }
-
             AlertDialog.Builder(this@ArticleEditorActivity)
                 .setTitle("Discard changes?")
                 .setMessage("You have unsaved edits. Save as draft before leaving?")
-                .setPositiveButton("Save Draft") { _, _ ->
-                    saveDraft {
-                        finish()
-                    }
-                }
-                .setNegativeButton("Discard") { _, _ ->
-                    finish()
-                }
+                .setPositiveButton("Save Draft") { _, _ -> saveDraft { finish() } }
+                .setNegativeButton("Discard") { _, _ -> finish() }
                 .setNeutralButton("Cancel", null)
                 .show()
         }
     }
 
-    private fun hasUnsavedChanges(): Boolean {
-        return binding.etArticleTitle.text?.isNotBlank() == true ||
+    private fun hasUnsavedChanges(): Boolean =
+        binding.etArticleTitle.text?.isNotBlank() == true ||
             binding.etArticleSummary.text?.isNotBlank() == true ||
             binding.etArticleContent.text?.isNotBlank() == true
-    }
 
     private fun observePipelineState() {
         viewModel.pipelineState.observe(this, Observer { state ->
@@ -133,17 +126,15 @@ class ArticleEditorActivity : AppCompatActivity() {
         })
     }
 
-    private fun buildArticleForSave(status: String = "draft"): Article {
-        return Article(
-            title = binding.etArticleTitle.text.toString().trim(),
-            summary = binding.etArticleSummary.text.toString().trim(),
-            content = binding.etArticleContent.text.toString().trim(),
-            status = status,
-            geminiChecked = binding.chipGemini.isChecked,
-            openaiChecked = binding.chipOpenai.isChecked,
-            sarvamChecked = binding.chipSarvam.isChecked
-        )
-    }
+    private fun buildArticleForSave(status: String = "draft"): Article = Article(
+        title = binding.etArticleTitle.text.toString().trim(),
+        summary = binding.etArticleSummary.text.toString().trim(),
+        content = binding.etArticleContent.text.toString().trim(),
+        status = status,
+        geminiChecked = binding.chipGemini.isChecked,
+        openaiChecked = binding.chipOpenai.isChecked,
+        sarvamChecked = binding.chipSarvam.isChecked
+    )
 
     private fun saveDraft(onComplete: (() -> Unit)? = null) {
         val title = binding.etArticleTitle.text.toString().trim()
@@ -156,13 +147,12 @@ class ArticleEditorActivity : AppCompatActivity() {
             binding.etArticleContent.error = "Please generate or enter article content"
             return
         }
-
         lifecycleScope.launch {
-            val article = buildArticleForSave(status = "draft")
+            val article = buildArticleForSave("draft")
             withContext(Dispatchers.IO) {
                 AppDatabase.getDatabase(this@ArticleEditorActivity).articleDao().insert(article)
             }
-            Toast.makeText(this@ArticleEditorActivity, "Saved as draft", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@ArticleEditorActivity, "\u2705 Saved as draft", Toast.LENGTH_SHORT).show()
             onComplete?.invoke()
         }
     }
@@ -174,7 +164,6 @@ class ArticleEditorActivity : AppCompatActivity() {
             Toast.makeText(this, "Title and content are required before publish", Toast.LENGTH_SHORT).show()
             return
         }
-
         val siteUrl = apiKeyManager.getWordPressSiteUrl().trim()
         val username = apiKeyManager.getWordPressUsername().trim()
         val appPassword = apiKeyManager.getWordPressPassword().trim()
@@ -182,14 +171,8 @@ class ArticleEditorActivity : AppCompatActivity() {
             Toast.makeText(this, "Configure WordPress credentials in Settings first", Toast.LENGTH_LONG).show()
             return
         }
-
-        val site = WordPressSite(
-            name = "Default",
-            siteUrl = siteUrl,
-            username = username,
-            appPassword = appPassword
-        )
-        val article = buildArticleForSave(status = "draft")
+        val site = WordPressSite(name = "Default", siteUrl = siteUrl, username = username, appPassword = appPassword)
+        val article = buildArticleForSave("draft")
         val adsCode = apiKeyManager.getWordPressAdsCode()
 
         binding.progressGroup.visibility = View.VISIBLE
@@ -197,16 +180,14 @@ class ArticleEditorActivity : AppCompatActivity() {
         binding.btnPublishDraft.isEnabled = false
 
         lifecycleScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                wpClient.pushDraft(site, article, adsCode)
-            }
+            val result = withContext(Dispatchers.IO) { wpClient.pushDraft(site, article, adsCode) }
             binding.progressGroup.visibility = View.GONE
             binding.btnPublishDraft.isEnabled = true
             if (result.success) {
-                binding.tvPipelineStatus.text = "✅ Draft published (Post ID: ${result.postId})"
+                binding.tvPipelineStatus.text = "\u2705 Draft published (Post ID: ${result.postId})"
                 Toast.makeText(this@ArticleEditorActivity, "Draft pushed to WordPress", Toast.LENGTH_LONG).show()
             } else {
-                binding.tvPipelineStatus.text = "❌ Publish failed"
+                binding.tvPipelineStatus.text = "\u274C Publish failed"
                 Toast.makeText(this@ArticleEditorActivity, result.error, Toast.LENGTH_LONG).show()
             }
         }

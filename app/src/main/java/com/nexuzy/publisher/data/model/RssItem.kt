@@ -1,5 +1,9 @@
 package com.nexuzy.publisher.data.model
 
+import android.os.Parcelable
+import kotlinx.parcelize.Parcelize
+
+@Parcelize
 data class RssItem(
     val title: String,
     val description: String,
@@ -8,4 +12,4 @@ data class RssItem(
     val imageUrl: String = "",
     val feedName: String = "",
     val feedCategory: String = ""
-)
+) : Parcelable
