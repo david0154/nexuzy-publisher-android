@@ -12,13 +12,11 @@ import com.nexuzy.publisher.R
 import com.nexuzy.publisher.auth.GoogleSignInManager
 import com.nexuzy.publisher.data.firebase.FirebaseUserRepository
 import com.nexuzy.publisher.data.model.firebase.FirebaseUserProfile
-import com.nexuzy.publisher.data.prefs.AppPreferences
 import com.nexuzy.publisher.ui.main.MainActivity
 import kotlinx.coroutines.launch
 
 class LoginActivity : AppCompatActivity() {
 
-    private lateinit var prefs: AppPreferences
     private lateinit var signInManager: GoogleSignInManager
     private val userRepo = FirebaseUserRepository()
 
@@ -36,7 +34,7 @@ class LoginActivity : AppCompatActivity() {
                             lastLoginAt = System.currentTimeMillis()
                         )
                     )
-                    Toast.makeText(this@LoginActivity, "✅ Google login successful", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@LoginActivity, "\u2705 Google login successful", Toast.LENGTH_SHORT).show()
                     openMain()
                 } else {
                     Toast.makeText(this@LoginActivity, "Google login failed", Toast.LENGTH_LONG).show()
@@ -49,22 +47,16 @@ class LoginActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = AppPreferences(this)
 
-        val current = FirebaseAuth.getInstance().currentUser
-        if (current != null) {
+        // If already signed in, go straight to main
+        if (FirebaseAuth.getInstance().currentUser != null) {
             openMain()
             return
         }
 
-        val clientId = prefs.googleWebClientId
-        if (clientId.isBlank()) {
-            Toast.makeText(this, "Add Google Web Client ID in settings to enable Google login", Toast.LENGTH_LONG).show()
-            openMain()
-            return
-        }
-
-        signInManager = GoogleSignInManager(this, clientId)
+        // Web Client ID is baked into the app via google-services.json (R.string.default_web_client_id)
+        // No user input required
+        signInManager = GoogleSignInManager(this, getString(R.string.default_web_client_id))
         setContentView(R.layout.activity_login)
 
         findViewById<Button>(R.id.btnGoogleSignIn).setOnClickListener {

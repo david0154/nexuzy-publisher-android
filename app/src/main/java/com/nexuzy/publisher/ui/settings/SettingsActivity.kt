@@ -43,7 +43,7 @@ class SettingsActivity : AppCompatActivity() {
             etWpSiteUrl.setText(keyManager.getWordPressSiteUrl())
             etWpUsername.setText(keyManager.getWordPressUsername())
             etWpPassword.setText(keyManager.getWordPressPassword())
-            etGoogleWebClientId.setText(appPreferences.googleWebClientId)
+            // Google Web Client ID removed from settings — it is now baked into the app
             etSupportEmail.setText(appPreferences.supportEmail)
             etPrivacyPolicyUrl.setText(appPreferences.privacyPolicyUrl)
         }
@@ -68,8 +68,7 @@ class SettingsActivity : AppCompatActivity() {
                 keyManager.setWordPressSiteUrl(etWpSiteUrl.text.toString().trim())
                 keyManager.setWordPressUsername(etWpUsername.text.toString().trim())
                 keyManager.setWordPressPassword(etWpPassword.text.toString().trim())
-
-                appPreferences.googleWebClientId = etGoogleWebClientId.text.toString().trim()
+                // Google Web Client ID no longer saved here
                 appPreferences.supportEmail = etSupportEmail.text.toString().trim()
                 appPreferences.privacyPolicyUrl = etPrivacyPolicyUrl.text.toString().trim()
             }
@@ -79,7 +78,7 @@ class SettingsActivity : AppCompatActivity() {
 
             keyManager.resetRotation()
 
-            Toast.makeText(this, "✅ Settings saved!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "\u2705 Settings saved!", Toast.LENGTH_SHORT).show()
         }
     }
 
