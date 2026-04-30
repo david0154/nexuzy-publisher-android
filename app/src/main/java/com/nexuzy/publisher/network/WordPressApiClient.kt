@@ -53,9 +53,6 @@ class WordPressApiClient {
 
     /**
      * Fetches ALL categories from the WordPress site.
-     * Used to populate the category spinner when adding an RSS feed,
-     * and to validate category before pushing an article.
-     *
      * Paginates automatically (100 per page) so large sites return everything.
      */
     suspend fun fetchCategories(site: WordPressSite): List<WpCategory> =
@@ -91,7 +88,6 @@ class WordPressApiClient {
                             )
                         )
                     }
-                    // If fewer than 100 returned, we've reached the last page
                     if (arr.size() < 100) break
                     page++
                 } catch (e: Exception) {
@@ -103,20 +99,20 @@ class WordPressApiClient {
             all
         }
 
-    // ─── Publish post (category-validated) ───────────────────────────────────
+    // ─── Publish post ─────────────────────────────────────────────────────────
 
     /**
      * Full publish flow:
-     * 1. Validate article category exists on WordPress site (skip push if not found).
+     * 1. Validate / create article category on WordPress.
      * 2. Resolve / create tag IDs.
-     * 3. Upload featured image (local file → media library).
-     *    If local file missing, download from imageUrl and upload.
-     * 4. Publish draft with full SEO meta.
-     *
-     * Category-push rule:
-     *   - Only push if article.category matches an existing WP category.
-     *   - If category is absent on WP, return PublishResult with skipReason.
-     *   - Set allowCategoryCreate = true to create missing categories automatically.
+     * 3. Upload featured image (local file → URL → skip).
+     * 4. Build final article content:
+     *    - Article body split in two halves
+     *    - Article-related image injected as Gutenberg wp:image block at the midpoint
+     *    - Ads code appended as wp:html block
+     *    - Tags section appended at the bottom with #tag chips
+     *    - SEO focus keyphrase & meta description stored as HTML comments
+     * 5. Publish draft with full Yoast + Rank Math SEO meta.
      */
     suspend fun publishPost(
         site: WordPressSite,
@@ -136,7 +132,6 @@ class WordPressApiClient {
 
             val categoryIds: List<Long>
             if (!allowCategoryCreate) {
-                // Strict mode: only push if category EXISTS on WordPress
                 val wpCategories = fetchCategoriesRaw(siteUrl, auth)
                 val matched = wpCategories.filter {
                     it.name.equals(effectiveCategory.trim(), ignoreCase = true) ||
@@ -154,7 +149,6 @@ class WordPressApiClient {
                 }
                 categoryIds = matched.map { it.id }
             } else {
-                // Default: create category if missing (original behaviour)
                 val chain = NewsCategory.getCategoryChain(effectiveCategory)
                 categoryIds = resolveCategoryIds(siteUrl, auth, chain)
             }
@@ -163,7 +157,6 @@ class WordPressApiClient {
             val tagIds = resolveTagIds(siteUrl, auth, article.tags)
 
             // Step 3 — Upload featured image
-            //   Priority: local file → remote URL → no image
             val featuredMediaId = when {
                 article.imagePath.isNotBlank() && File(article.imagePath).exists() ->
                     uploadFeaturedImage(siteUrl, auth, article.imagePath, article.title)
@@ -172,10 +165,21 @@ class WordPressApiClient {
                 else -> 0L
             }
 
-            // Step 4 — Build and send post
+            // Step 4 — Build full article content with image in mid + tags + ads + SEO
+            val finalContent = buildArticleContent(
+                content          = article.content,
+                adsCode          = adsCode,
+                imageUrl         = article.imageUrl,
+                title            = article.title,
+                tags             = article.tags,
+                focusKeyphrase   = article.focusKeyphrase,
+                metaDescription  = article.metaDescription
+            )
+
+            // Step 5 — Build and send post
             val postBody = JsonObject().apply {
                 addProperty("title",   article.title)
-                addProperty("content", withAdsCode(article.content, adsCode))
+                addProperty("content", finalContent)
                 addProperty("excerpt", article.metaDescription.ifBlank { article.summary })
                 addProperty("status",  status)
 
@@ -228,6 +232,114 @@ class WordPressApiClient {
             Log.e("WPClient", "Exception: ${e.message}")
             PublishResult(false, error = e.message ?: "Publish error")
         }
+    }
+
+    // ─── Build article content ────────────────────────────────────────────────
+
+    /**
+     * Builds the final WordPress post HTML content:
+     *
+     * Structure:
+     *   [First half of article paragraphs]
+     *   [Article-related image as Gutenberg wp:image block — center aligned]
+     *   [Second half of article paragraphs]
+     *   [Ads code as wp:html block]
+     *   [Tags section with #tag chips]
+     *   [SEO meta comments (hidden, used by Yoast/RankMath)]
+     *
+     * Supports both HTML (<p>...</p>) and plain text (double-newline separated)
+     * input content from Gemini.
+     */
+    private fun buildArticleContent(
+        content: String,
+        adsCode: String,
+        imageUrl: String,
+        title: String,
+        tags: String,
+        focusKeyphrase: String,
+        metaDescription: String
+    ): String {
+        val sb = StringBuilder()
+
+        // ── Split content into paragraph blocks ──
+        val paragraphs: List<String> = if (content.contains("</p>", ignoreCase = true)) {
+            // HTML content from Gemini: split on closing </p> tag
+            content.split(Regex("(?<=</p>)", RegexOption.IGNORE_CASE))
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+        } else {
+            // Plain text: split on double newlines and wrap in <p>
+            content.split(Regex("\\n\\n+"))
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .map { para ->
+                    if (para.startsWith("<")) para
+                    else "<!-- wp:paragraph -->\n<p>$para</p>\n<!-- /wp:paragraph -->"
+                }
+        }
+
+        if (paragraphs.isEmpty()) {
+            // Fallback: use raw content if parsing yields nothing
+            sb.append(content)
+        } else {
+            val midPoint = (paragraphs.size / 2).coerceAtLeast(1)
+
+            // ── First half of article body ──
+            paragraphs.take(midPoint).forEach { p ->
+                sb.append(p).append("\n\n")
+            }
+
+            // ── Article-related image injected in the middle ──
+            if (imageUrl.isNotBlank()) {
+                sb.append("""
+<!-- wp:image {"align":"center","sizeSlug":"large","linkDestination":"none","className":"nexuzy-article-mid-image"} -->
+<figure class="wp-block-image aligncenter size-large nexuzy-article-mid-image">
+<img src="$imageUrl" alt="$title" loading="lazy" decoding="async" class="nexuzy-mid-img"/>
+<figcaption class="wp-element-caption">$title</figcaption>
+</figure>
+<!-- /wp:image -->
+""".trimIndent())
+                sb.append("\n\n")
+            }
+
+            // ── Second half of article body ──
+            paragraphs.drop(midPoint).forEach { p ->
+                sb.append(p).append("\n\n")
+            }
+        }
+
+        // ── Ads code (after article body, before tags) ──
+        if (adsCode.isNotBlank()) {
+            sb.append("\n<!-- wp:html -->\n")
+            sb.append(adsCode)
+            sb.append("\n<!-- /wp:html -->\n\n")
+        }
+
+        // ── Tags section at the bottom of the article ──
+        if (tags.isNotBlank()) {
+            val tagList = tags.split(",")
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+            if (tagList.isNotEmpty()) {
+                val tagChips = tagList.joinToString(" &nbsp;·&nbsp; ") { tag ->
+                    "<span class=\"nexuzy-tag-chip\">#$tag</span>"
+                }
+                sb.append("""\n<!-- wp:paragraph {"className":"nexuzy-article-tags"} -->\n""")
+                sb.append("""<p class="nexuzy-article-tags" style="margin-top:2rem;padding-top:1rem;border-top:1px solid #e5e7eb;font-size:0.88em;color:#6b7280;">""")
+                sb.append("<strong>\uD83C\uDFF7\uFE0F Tags:</strong> $tagChips")
+                sb.append("</p>\n<!-- /wp:paragraph -->\n\n")
+            }
+        }
+
+        // ── Hidden SEO meta comments (used by Yoast / Rank Math via post content parsing) ──
+        if (metaDescription.isNotBlank()) {
+            sb.append("\n<!-- nexuzy:meta-desc:${metaDescription.take(160).replace("--", "-")} -->")
+        }
+        if (focusKeyphrase.isNotBlank()) {
+            sb.append("\n<!-- nexuzy:focus-kw:${focusKeyphrase.trim().replace("--", "-")} -->")
+        }
+
+        return sb.toString().trim()
     }
 
     // ─── Internal helpers ─────────────────────────────────────────────────────
@@ -355,7 +467,6 @@ class WordPressApiClient {
     private fun uploadFeaturedImageFromUrl(siteUrl: String, auth: String, imageUrl: String, title: String): Long {
         return try {
             Log.d("WPClient", "Uploading image from URL: $imageUrl")
-            // Download image bytes
             val dlResp  = client.newCall(Request.Builder().url(imageUrl).build()).execute()
             if (!dlResp.isSuccessful) return 0
             val bytes   = dlResp.body?.bytes() ?: return 0
@@ -414,11 +525,6 @@ class WordPressApiClient {
             ).execute()
             resp.isSuccessful
         } catch (e: Exception) { false }
-    }
-
-    private fun withAdsCode(content: String, adsCode: String): String {
-        if (adsCode.isBlank()) return content
-        return "$content\n\n$adsCode"
     }
 
     private fun buildAuthHeader(site: WordPressSite): String {

@@ -14,9 +14,11 @@ import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.nexuzy.publisher.R
 import com.nexuzy.publisher.data.db.AppDatabase
+import com.nexuzy.publisher.data.firebase.FirestoreUserRepository
 import com.nexuzy.publisher.data.model.RssFeed
 import com.nexuzy.publisher.data.model.WordPressSite
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
+import com.nexuzy.publisher.data.prefs.AppPreferences
 import com.nexuzy.publisher.databinding.FragmentRssBinding
 import com.nexuzy.publisher.network.WordPressApiClient
 import com.nexuzy.publisher.ui.main.NewsViewModel
@@ -34,6 +36,9 @@ class RssFragment : Fragment() {
     private val newsViewModel: NewsViewModel by activityViewModels()
     private val wpClient = WordPressApiClient()
 
+    // Firestore repository for syncing RSS feeds and API keys to Firebase
+    private lateinit var firestoreRepo: FirestoreUserRepository
+
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -46,13 +51,24 @@ class RssFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
+        // Initialise Firestore repo
+        val keyManager = ApiKeyManager(requireContext())
+        firestoreRepo  = FirestoreUserRepository(keyManager, AppPreferences(requireContext()))
+
         adapter = RssFeedAdapter { feed -> deleteFeed(feed) }
         binding.rvRssFeeds.layoutManager = LinearLayoutManager(requireContext())
         binding.rvRssFeeds.adapter = adapter
 
         val db = AppDatabase.getDatabase(requireContext())
+
+        // Observe local Room feeds.
+        // If the DB is empty (fresh install / reinstall), auto-restore from Firebase.
         db.rssFeedDao().getAllFeeds().observe(viewLifecycleOwner) { feeds ->
             adapter.submitList(feeds)
+
+            if (feeds.isEmpty()) {
+                restoreFeedsFromFirebase(db)
+            }
         }
 
         // Populate category dropdown if ViewModel already has cached WP categories
@@ -72,7 +88,6 @@ class RssFragment : Fragment() {
 
         // Load WP Categories button
         binding.btnLoadWpCategories.setOnClickListener {
-            val keyManager = ApiKeyManager(requireContext())
             val siteUrl  = keyManager.getWordPressSiteUrl().trim()
             val username = keyManager.getWordPressUsername().trim()
             val password = keyManager.getWordPressPassword().trim()
@@ -113,7 +128,6 @@ class RssFragment : Fragment() {
                         "✅ ${cats.size} WordPress categories loaded",
                         Toast.LENGTH_SHORT
                     ).show()
-                    // Show dropdown immediately
                     binding.actvFeedCategory.showDropDown()
                 } catch (e: Exception) {
                     binding.btnLoadWpCategories.isEnabled = true
@@ -128,13 +142,14 @@ class RssFragment : Fragment() {
             }
         }
 
-        // Observe fetching state to disable button
+        // Observe fetching state to disable button while fetching is in progress
         newsViewModel.isFetching.observe(viewLifecycleOwner) { fetching ->
             binding.btnFetchLatestNews.isEnabled = !fetching
             binding.btnFetchLatestNews.text =
                 if (fetching) "Fetching…" else "Fetch Latest News"
         }
 
+        // ── Add RSS Feed ──────────────────────────────────────────────────────
         binding.btnAddFeed.setOnClickListener {
             val name = binding.etFeedName.text?.toString()?.trim().orEmpty()
             val url  = binding.etFeedUrl.text?.toString()?.trim().orEmpty()
@@ -151,18 +166,33 @@ class RssFragment : Fragment() {
             }
 
             viewLifecycleOwner.lifecycleScope.launch {
-                db.rssFeedDao().insert(RssFeed(name = name, url = url, category = category))
+                // 1. Save to local Room DB
+                val insertedId = withContext(Dispatchers.IO) {
+                    db.rssFeedDao().insert(RssFeed(name = name, url = url, category = category))
+                }
+
+                // 2. Sync to Firebase Firestore (background, non-blocking)
+                launch(Dispatchers.IO) {
+                    firestoreRepo.addRssFeedToFirestore(
+                        rssId    = insertedId.toString(),
+                        url      = url,
+                        name     = name,
+                        category = category
+                    )
+                }
+
                 binding.etFeedName.setText("")
                 binding.etFeedUrl.setText("")
                 binding.actvFeedCategory.setText("")
                 Toast.makeText(
                     requireContext(),
-                    "✅ RSS feed added (category: $category)",
+                    "✅ RSS feed added & synced to your account",
                     Toast.LENGTH_SHORT
                 ).show()
             }
         }
 
+        // ── Fetch Latest News ─────────────────────────────────────────────────
         binding.btnFetchLatestNews.setOnClickListener {
             newsViewModel.setFetching(true)
             viewLifecycleOwner.lifecycleScope.launch {
@@ -203,10 +233,56 @@ class RssFragment : Fragment() {
         }
     }
 
+    // ── Delete RSS feed from Room + Firestore ─────────────────────────────────
     private fun deleteFeed(feed: RssFeed) {
         viewLifecycleOwner.lifecycleScope.launch {
-            AppDatabase.getDatabase(requireContext()).rssFeedDao().delete(feed)
+            // 1. Delete from local Room DB
+            withContext(Dispatchers.IO) {
+                AppDatabase.getDatabase(requireContext()).rssFeedDao().delete(feed)
+            }
+
+            // 2. Sync deletion to Firebase Firestore
+            launch(Dispatchers.IO) {
+                firestoreRepo.deleteRssFeedFromFirestore(feed.id.toString())
+            }
+
             Toast.makeText(requireContext(), "RSS feed deleted", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // ── Restore RSS feeds from Firebase when local DB is empty ────────────────
+    /**
+     * Called once when the feed list is observed to be empty.
+     * Downloads the user's saved RSS feeds from Firestore and inserts them into Room.
+     * This handles reinstall / new device scenarios automatically.
+     */
+    private fun restoreFeedsFromFirebase(db: AppDatabase) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val cloudFeeds = withContext(Dispatchers.IO) {
+                    firestoreRepo.loadRssFeedsFromFirestore()
+                }
+                if (cloudFeeds.isNotEmpty()) {
+                    withContext(Dispatchers.IO) {
+                        cloudFeeds.forEach { entry ->
+                            db.rssFeedDao().insert(
+                                RssFeed(
+                                    name     = entry.name,
+                                    url      = entry.url,
+                                    category = entry.category
+                                )
+                            )
+                        }
+                    }
+                    Toast.makeText(
+                        requireContext(),
+                        "\uD83D\uDD04 ${cloudFeeds.size} RSS feeds restored from your account",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            } catch (e: Exception) {
+                // Silent failure — user can add feeds manually
+            }
         }
     }
 
