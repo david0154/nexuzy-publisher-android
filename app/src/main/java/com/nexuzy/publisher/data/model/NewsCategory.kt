@@ -4,13 +4,13 @@ package com.nexuzy.publisher.data.model
  * All supported news categories for RSS feeds and WordPress publishing.
  *
  * Hierarchy: sub-categories include their parent when pushed to WordPress.
- * Example: "AI & Machine Learning" → WP gets IDs for ["Technology", "AI & Machine Learning"]
+ * Example: "AI & Machine Learning" -> WP gets IDs for ["Technology", "AI & Machine Learning"]
  *
  * Maintained by: David | Nexuzy Lab
  */
 object NewsCategory {
 
-    /** Full flat list — used in RSS feed category picker spinner */
+    /** Full flat list - used in RSS feed category picker spinner */
     val ALL: List<String> = listOf(
         "General", "Breaking News", "Top Stories",
         "Politics", "Government", "Elections", "International Relations",
@@ -51,11 +51,11 @@ object NewsCategory {
         "Gaming"                to "Technology",
 
         // Science group
-        "Medicine"      to "Health",
-        "Research"      to "Science",
-        "Space"         to "Science",
-        "Environment"   to "Science",
-        "Climate Change"to "Science",
+        "Medicine"       to "Health",
+        "Research"       to "Science",
+        "Space"          to "Science",
+        "Environment"    to "Science",
+        "Climate Change" to "Science",
 
         // Sports group
         "Football"   to "Sports",
@@ -95,9 +95,9 @@ object NewsCategory {
     /**
      * Returns the full category chain for WordPress assignment.
      *
-     * "AI & Machine Learning" → ["Technology", "AI & Machine Learning"]
-     * "Technology"            → ["Technology"]
-     * "General"               → ["General"]
+     * getCategoryChain("AI & Machine Learning") -> ["Technology", "AI & Machine Learning"]
+     * getCategoryChain("Technology")            -> ["Technology"]
+     * getCategoryChain("General")               -> ["General"]
      */
     fun getCategoryChain(category: String): List<String> {
         if (category.isBlank()) return listOf("General")
@@ -117,7 +117,7 @@ object NewsCategory {
 
     /**
      * Detects the best-matching category from an RSS item title + description.
-     * Used as fallback when the RSS feed doesn't provide a category.
+     * Used as fallback when the RSS feed does not provide a category.
      * Falls back to "General" when no keyword matches.
      */
     fun detectCategory(title: String, description: String = ""): String {

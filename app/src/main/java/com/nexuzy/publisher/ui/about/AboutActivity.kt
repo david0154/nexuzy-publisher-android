@@ -3,10 +3,7 @@ package com.nexuzy.publisher.ui.about
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.widget.LinearLayout
-import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import com.nexuzy.publisher.BuildConfig
 import com.nexuzy.publisher.R
 import com.nexuzy.publisher.databinding.ActivityAboutBinding
 
@@ -23,6 +20,14 @@ class AboutActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityAboutBinding
 
+    /** App version resolved at runtime via PackageManager (no BuildConfig needed). */
+    private val appVersionName: String
+        get() = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.0.0"
+        } catch (e: Exception) {
+            "1.0.0"
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityAboutBinding.inflate(layoutInflater)
@@ -33,37 +38,37 @@ class AboutActivity : AppCompatActivity() {
 
         binding.apply {
 
-            // ── App info ────────────────────────────────────────────
-            tvAppVersion.text = "${getString(R.string.app_name)} v${BuildConfig.VERSION_NAME}"
+            // -- App info -------------------------------------------------
+            tvAppVersion.text = "${getString(R.string.app_name)} v$appVersionName"
 
-            // ── Developer + Maintainer ───────────────────────────────
+            // -- Developer + Maintainer -----------------------------------
             tvDeveloperName.text = buildString {
                 append(getString(R.string.developer_name))
-                append(" • ")
+                append(" - ")
                 append(getString(R.string.developer_company))
-                append(" • ")
+                append(" - ")
                 append(getString(R.string.developer_location))
             }
 
-            // ── Organisation tagline ──────────────────────────────
+            // -- Organisation tagline -------------------------------------
             tvDeveloperCompany.text = buildString {
-                appendLine("🛠️  Developed & Maintained by David")
-                appendLine("🏢  Organisation: Nexuzy Lab")
-                appendLine("📍  ${getString(R.string.developer_location)}")
-                appendLine("📧  ${getString(R.string.support_email)}")
-                append("${getString(R.string.app_type)}")
+                appendLine("Developed & Maintained by David")
+                appendLine("Organisation: Nexuzy Lab")
+                appendLine("Location: ${getString(R.string.developer_location)}")
+                appendLine("Support: ${getString(R.string.support_email)}")
+                append(getString(R.string.app_type))
             }
 
-            // ── Tools & Tech shown as location line ────────────────
+            // -- Tools & Tech ---------------------------------------------
             tvDeveloperLocation.text = buildString {
-                appendLine("🤖  ${getString(R.string.tools_tech_title)}")
+                appendLine(getString(R.string.tools_tech_title))
                 append(getString(R.string.tools_tech))
             }
-            tvDeveloperLocation.setOnClickListener(null) // no-op for tech stack text
+            tvDeveloperLocation.setOnClickListener(null)
 
-            // ── Buttons ────────────────────────────────────────────
+            // -- Buttons --------------------------------------------------
 
-            // Button 1: Open Source GitHub repo
+            // Button 1: Open Source GitHub
             btnGithubRepo.text = getString(R.string.opensource_label)
             btnGithubRepo.setOnClickListener {
                 openUrl(getString(R.string.open_source_url))
@@ -93,9 +98,14 @@ class AboutActivity : AppCompatActivity() {
         val intent = Intent(Intent.ACTION_SENDTO).apply {
             data = Uri.parse("mailto:$email")
             putExtra(Intent.EXTRA_EMAIL, arrayOf(email))
-            putExtra(Intent.EXTRA_SUBJECT, "Nexuzy Publisher Android — Support")
-            putExtra(Intent.EXTRA_TEXT,
-                "App Version: ${BuildConfig.VERSION_NAME}\nDevice: ${android.os.Build.MODEL}\nAndroid: ${android.os.Build.VERSION.RELEASE}\n\nDescribe your issue:\n")
+            putExtra(Intent.EXTRA_SUBJECT, "Nexuzy Publisher Android - Support")
+            putExtra(
+                Intent.EXTRA_TEXT,
+                "App Version: $appVersionName\n" +
+                "Device: ${android.os.Build.MODEL}\n" +
+                "Android: ${android.os.Build.VERSION.RELEASE}\n\n" +
+                "Describe your issue:\n"
+            )
         }
         startActivity(intent)
     }
