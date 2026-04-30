@@ -54,9 +54,11 @@ class LoginActivity : AppCompatActivity() {
             return
         }
 
-        // Web Client ID is baked into the app via google-services.json (R.string.default_web_client_id)
-        // No user input required
-        signInManager = GoogleSignInManager(this, getString(R.string.default_web_client_id))
+        // Web Client ID from R.string.google_web_client_id (defined in strings.xml).
+        // Replace the placeholder value in strings.xml with your actual OAuth 2.0 Web Client ID
+        // from Google Cloud Console -> APIs & Services -> Credentials.
+        val webClientId = getString(R.string.google_web_client_id)
+        signInManager = GoogleSignInManager(this, webClientId)
         setContentView(R.layout.activity_login)
 
         findViewById<Button>(R.id.btnGoogleSignIn).setOnClickListener {

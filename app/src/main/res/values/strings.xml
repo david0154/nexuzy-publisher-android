@@ -34,6 +34,15 @@
     <string name="feed_url_hint">Enter RSS feed URL</string>
     <string name="publish_to_wordpress">Publish to WordPress</string>
 
+    <!--
+        Google Sign-In Web Client ID.
+        Replace the placeholder below with your actual OAuth 2.0 Web Client ID from
+        Google Cloud Console → APIs & Services → Credentials.
+        This is the same value that would be auto-generated in R.string.default_web_client_id
+        if google-services.json were present in the project.
+    -->
+    <string name="google_web_client_id">YOUR_WEB_CLIENT_ID.apps.googleusercontent.com</string>
+
     <!-- About -->
     <string name="about_developer">Developer</string>
     <string name="developer_name">David</string>
