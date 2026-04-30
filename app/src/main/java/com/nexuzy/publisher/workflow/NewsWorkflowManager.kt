@@ -100,8 +100,6 @@ class NewsWorkflowManager(private val context: Context) {
      * Fetches RSS + runs a lightweight OpenAI credibility check on each item.
      * Gemini is NOT called. Use this to populate the news list with
      * credibility badges before the user selects an article to write.
-     *
-     * This uses internet access to fetch RSS and OpenAI for verification.
      */
     suspend fun fetchAndVerifyWithOpenAi(limitPerFeed: Int = 20): DailyNewsSnapshot =
         withContext(Dispatchers.IO) {
@@ -119,7 +117,7 @@ class NewsWorkflowManager(private val context: Context) {
                     )
                 } catch (e: Exception) {
                     Log.w("NewsWorkflow", "OpenAI quick-verify failed: ${e.message}")
-                    candidate // return unmodified on error
+                    candidate
                 }
             }
 
@@ -196,13 +194,8 @@ class NewsWorkflowManager(private val context: Context) {
             )
         }
 
-    // ─── LEGACY BATCH: kept for compatibility but Gemini NOT called ──────────
+    // ─── LEGACY BATCH: kept for compatibility ────────────────────────────────
 
-    /**
-     * Old batch function — now just fetches + OpenAI verifies without writing.
-     * If you want batch article writing, call processAndPushSingleItem() per item
-     * from the UI with user confirmation for each.
-     */
     suspend fun fetchVerifyWriteSaveAndPushDraft(limitPerFeed: Int = 5): WorkflowResult =
         withContext(Dispatchers.IO) {
             val snapshot = fetchAndVerifyWithOpenAi(limitPerFeed)
@@ -219,11 +212,12 @@ class NewsWorkflowManager(private val context: Context) {
         val merged = mutableListOf<RssItem>()
         for (feed in feeds) {
             try {
+                // FIX: parameter is `enrichItems` (not scrapeImages)
                 val items = rssParser.fetchFeed(
                     feedUrl      = feed.url,
                     feedName     = feed.name,
                     feedCategory = feed.category,
-                    scrapeImages = true
+                    enrichItems  = true
                 ).take(limitPerFeed)
                 merged.addAll(items)
                 Log.d("NewsWorkflow", "Fetched ${items.size} from ${feed.name}")
@@ -280,12 +274,6 @@ class NewsWorkflowManager(private val context: Context) {
             listOf("movie", "actor", "celebrity", "music", "show").any { text.contains(it) }         -> "Entertainment"
             else -> item.feedCategory.ifBlank { "General" }
         }
-    }
-
-    private fun isLikelyNews(item: RssItem): Boolean {
-        if (item.title.isBlank() || item.link.isBlank()) return false
-        return listOf("advertisement", "sponsored", "coupon", "deal")
-            .none { "${item.title} ${item.description}".lowercase().contains(it) }
     }
 
     private fun isTodayNews(item: RssItem): Boolean {

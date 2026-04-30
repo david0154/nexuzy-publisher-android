@@ -1,6 +1,7 @@
 package com.nexuzy.publisher.network
 
 import android.util.Log
+import com.google.gson.JsonPrimitive
 import com.google.gson.JsonParser
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
 import okhttp3.MediaType.Companion.toMediaType
@@ -11,8 +12,11 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Sarvam AI API client.
- * ONLY used for grammar and spelling correction.
+ * ONLY used for grammar and spelling correction of written articles.
  * Runs after Gemini writes and OpenAI fact-checks the article.
+ *
+ * NOTE: This class is ONLY for grammar correction.
+ * For the David AI in-app chat assistant, see SarvamChatClient.kt.
  */
 class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
@@ -32,17 +36,19 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
     /**
      * Check and correct grammar/spelling in the article.
-     * Uses Sarvam AI translate/text API to clean up the content.
+     * Uses Sarvam AI translate API (en-IN formal mode) to clean up content.
      */
     suspend fun checkGrammarAndSpelling(content: String): GrammarCheckResult {
         val apiKey = keyManager.getSarvamKey()
         if (apiKey.isBlank()) {
-            // Return original content if no key configured — don't block pipeline
-            return GrammarCheckResult(true, content, emptyList(), "Sarvam key not set; grammar check skipped")
+            return GrammarCheckResult(
+                success = true,
+                correctedText = content,
+                error = "Sarvam key not set; grammar check skipped"
+            )
         }
 
         return try {
-            // Split into chunks if content is very long (Sarvam has limits)
             val chunks = splitIntoChunks(content, 2000)
             val correctedChunks = mutableListOf<String>()
             val allIssues = mutableListOf<String>()
@@ -53,8 +59,8 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                     correctedChunks.add(result.correctedText)
                     allIssues.addAll(result.issuesFound)
                 } else {
-                    correctedChunks.add(chunk) // Keep original on error
-                    Log.w("SarvamClient", "Grammar check failed for chunk: ${result.error}")
+                    correctedChunks.add(chunk)
+                    Log.w("SarvamApiClient", "Grammar check failed for chunk: ${result.error}")
                 }
             }
 
@@ -64,14 +70,14 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 issuesFound = allIssues
             )
         } catch (e: Exception) {
+            Log.e("SarvamApiClient", "checkGrammarAndSpelling error: ${e.message}")
             GrammarCheckResult(false, content, emptyList(), e.message ?: "Error")
         }
     }
 
     private fun callSarvamGrammarApi(apiKey: String, text: String): GrammarCheckResult {
         return try {
-            // Use Sarvam's text API for grammar correction
-            val escapedText = com.google.gson.JsonPrimitive(text).toString()
+            val escapedText = JsonPrimitive(text).toString()
             val requestBody = """
                 {
                   "input": $escapedText,
@@ -99,7 +105,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 val translated = json.get("translated_text")?.asString ?: text
                 GrammarCheckResult(true, translated.ifBlank { text })
             } else {
-                Log.w("SarvamClient", "HTTP ${response.code}: $body")
+                Log.w("SarvamApiClient", "HTTP ${response.code}: $body")
                 GrammarCheckResult(false, text, error = "HTTP ${response.code}")
             }
         } catch (e: Exception) {

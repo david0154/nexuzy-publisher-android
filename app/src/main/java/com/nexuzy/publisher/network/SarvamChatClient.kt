@@ -14,22 +14,21 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
- * Sarvam AI Chat Client (singleton object).
+ * Sarvam AI Chat Client — David AI in-app assistant.
  *
- * Powers the "David AI" in-app assistant chat screen.
- * Uses Sarvam's sarvam-m model via the /v1/chat/completions endpoint.
+ * Powers the chat screen in DavidAiChatActivity.
+ * Uses Sarvam's sarvam-m model via /v1/chat/completions endpoint.
  *
- * This is a separate client from SarvamApiClient:
- *   - SarvamApiClient  → grammar correction on written articles (uses user's key)
+ * This is a SEPARATE client from SarvamApiClient:
+ *   - SarvamApiClient  → grammar correction for written articles (uses user's key)
  *   - SarvamChatClient → David AI in-app chat (uses developer pre-embedded key)
  *
- * End users do NOT need to configure an API key to use the chat feature.
+ * End users do NOT need to configure an API key for the chat feature.
  * Replace DEV_API_KEY with your Sarvam developer key.
  */
 object SarvamChatClient {
 
     // TODO: Replace with your actual developer Sarvam API key from https://dashboard.sarvam.ai
-    // This key is embedded so end-users don't need to configure anything.
     private const val DEV_API_KEY = "your-sarvam-dev-key-here"
 
     private const val BASE_URL = "https://api.sarvam.ai/v1/chat/completions"
@@ -50,9 +49,7 @@ object SarvamChatClient {
 
     /**
      * Send conversation history to Sarvam AI and get the assistant reply.
-     *
      * @param history List of (role, content) pairs. role = "user" or "assistant".
-     * @return ChatResult with the assistant's reply.
      */
     suspend fun chat(history: List<Pair<String, String>>): ChatResult =
         withContext(Dispatchers.IO) {
@@ -91,7 +88,6 @@ object SarvamChatClient {
     private fun buildChatBody(history: List<Pair<String, String>>): String {
         val messages = JsonArray()
 
-        // System prompt that defines David AI's persona
         val systemMsg = JsonObject().apply {
             addProperty("role", "system")
             addProperty(
@@ -103,7 +99,6 @@ object SarvamChatClient {
         }
         messages.add(systemMsg)
 
-        // Add conversation history
         for ((role, content) in history) {
             val msg = JsonObject().apply {
                 addProperty("role", role)
