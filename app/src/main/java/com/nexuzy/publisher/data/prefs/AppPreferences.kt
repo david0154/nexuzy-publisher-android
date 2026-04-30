@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 
 class AppPreferences(context: Context) {
+    // Keep this list append-only when possible for simpler branch merges.
     private val prefs: SharedPreferences =
         context.getSharedPreferences("nexuzy_prefs", Context.MODE_PRIVATE)
 
