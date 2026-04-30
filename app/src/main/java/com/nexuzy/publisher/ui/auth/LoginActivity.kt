@@ -8,10 +8,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.firebase.auth.FirebaseAuth
-import com.nexuzy.publisher.R
 import com.nexuzy.publisher.auth.GoogleSignInManager
 import com.nexuzy.publisher.data.firebase.FirebaseUserRepository
 import com.nexuzy.publisher.data.model.firebase.FirebaseUserProfile
+import com.nexuzy.publisher.data.prefs.ApiKeyManager
+import com.nexuzy.publisher.R
 import com.nexuzy.publisher.ui.main.MainActivity
 import kotlinx.coroutines.launch
 
@@ -20,7 +21,9 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var signInManager: GoogleSignInManager
     private val userRepo = FirebaseUserRepository()
 
-    private val googleLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    private val googleLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
         lifecycleScope.launch {
             try {
                 val user = signInManager.handleSignInResult(result.data)
@@ -34,13 +37,25 @@ class LoginActivity : AppCompatActivity() {
                             lastLoginAt = System.currentTimeMillis()
                         )
                     )
-                    Toast.makeText(this@LoginActivity, "\u2705 Google login successful", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        this@LoginActivity,
+                        "\u2705 Google login successful",
+                        Toast.LENGTH_SHORT
+                    ).show()
                     openMain()
                 } else {
-                    Toast.makeText(this@LoginActivity, "Google login failed", Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        this@LoginActivity,
+                        "Google login failed",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             } catch (e: Exception) {
-                Toast.makeText(this@LoginActivity, "Login error: ${e.message}", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this@LoginActivity,
+                    "Login error: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
@@ -54,14 +69,23 @@ class LoginActivity : AppCompatActivity() {
             return
         }
 
-        // Web Client ID from R.string.google_web_client_id (defined in strings.xml).
-        // Replace the placeholder value in strings.xml with your actual OAuth 2.0 Web Client ID
-        // from Google Cloud Console -> APIs & Services -> Credentials.
-        val webClientId = getString(R.string.google_web_client_id)
+        // Read Web Client ID from ApiKeyManager — no R.string or google-services.json needed.
+        // To set it: go to Settings -> Google Web Client ID
+        // or take it from google-services.json -> client_type:3 -> client_id
+        val webClientId = ApiKeyManager(this).getGoogleWebClientId()
+
         signInManager = GoogleSignInManager(this, webClientId)
         setContentView(R.layout.activity_login)
 
         findViewById<Button>(R.id.btnGoogleSignIn).setOnClickListener {
+            if (webClientId.isBlank()) {
+                Toast.makeText(
+                    this,
+                    "\u26a0\ufe0f Google Web Client ID not set. Add it in Settings.",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@setOnClickListener
+            }
             googleLauncher.launch(signInManager.signInIntent())
         }
 

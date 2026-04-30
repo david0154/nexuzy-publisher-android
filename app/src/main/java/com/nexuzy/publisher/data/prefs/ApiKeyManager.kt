@@ -33,32 +33,45 @@ class ApiKeyManager(context: Context) {
         }
     }
 
+    // ── Gemini ────────────────────────────────────────────────────────────────
     fun setGeminiKey(index: Int, key: String) = prefs.edit { putString("gemini_key_$index", key) }
     fun getGeminiKey(index: Int): String = prefs.getString("gemini_key_$index", "") ?: ""
     fun getGeminiKeys(): List<String> = (1..3).map { getGeminiKey(it) }.filter { it.isNotBlank() }
 
+    // ── OpenAI ────────────────────────────────────────────────────────────────
     fun setOpenAiKey(index: Int, key: String) = prefs.edit { putString("openai_key_$index", key) }
     fun getOpenAiKey(index: Int): String = prefs.getString("openai_key_$index", "") ?: ""
     fun getOpenAiKeys(): List<String> = (1..3).map { getOpenAiKey(it) }.filter { it.isNotBlank() }
 
+    // ── Sarvam ────────────────────────────────────────────────────────────────
     fun setSarvamKey(key: String) = prefs.edit { putString("sarvam_key", key) }
     fun getSarvamKey(): String = prefs.getString("sarvam_key", "") ?: ""
 
+    // ── Perplexity ────────────────────────────────────────────────────────────
     fun setPerplexityKey(index: Int, key: String) = prefs.edit { putString("perplexity_key_$index", key) }
     fun getPerplexityKey(index: Int): String = prefs.getString("perplexity_key_$index", "") ?: ""
     fun getPerplexityKeys(): List<String> = (1..3).map { getPerplexityKey(it) }.filter { it.isNotBlank() }
 
+    // ── Replit ────────────────────────────────────────────────────────────────
     fun setReplitKey(index: Int, key: String) = prefs.edit { putString("replit_key_$index", key) }
     fun getReplitKey(index: Int): String = prefs.getString("replit_key_$index", "") ?: ""
     fun getReplitKeys(): List<String> = (1..3).map { getReplitKey(it) }.filter { it.isNotBlank() }
 
+    // ── Other services ────────────────────────────────────────────────────────
     fun setMapsApiKey(key: String) = prefs.edit { putString("maps_api_key", key) }
     fun getMapsApiKey(): String = prefs.getString("maps_api_key", "") ?: ""
 
     fun setWeatherApiKey(key: String) = prefs.edit { putString("weather_api_key", key) }
     fun getWeatherApiKey(): String = prefs.getString("weather_api_key", "") ?: ""
 
-    /** Generic helpers to avoid merge conflicts when adding future providers. */
+    // ── Google Sign-In Web Client ID ──────────────────────────────────────────
+    // Stored here so LoginActivity never depends on R.string or google-services.json.
+    // Set this value in SettingsActivity or pre-populate from your google-services.json:
+    //   "client_type": 3  →  "client_id": "<YOUR_ID>.apps.googleusercontent.com"
+    fun setGoogleWebClientId(id: String) = prefs.edit { putString("google_web_client_id", id) }
+    fun getGoogleWebClientId(): String = prefs.getString("google_web_client_id", "") ?: ""
+
+    // ── Generic helpers ───────────────────────────────────────────────────────
     fun setProviderKey(provider: String, index: Int, key: String) =
         prefs.edit { putString("${provider.lowercase()}_key_$index", key) }
 
@@ -68,6 +81,7 @@ class ApiKeyManager(context: Context) {
     fun getProviderKeys(provider: String, maxKeys: Int = 3): List<String> =
         (1..maxKeys).map { getProviderKey(provider, it) }.filter { it.isNotBlank() }
 
+    // ── Key rotation ──────────────────────────────────────────────────────────
     private fun getCurrentGeminiIndex(): Int = prefs.getInt("gemini_current_index", 0)
     private fun getCurrentOpenAiIndex(): Int = prefs.getInt("openai_current_index", 0)
 
@@ -108,6 +122,7 @@ class ApiKeyManager(context: Context) {
         }
     }
 
+    // ── WordPress ─────────────────────────────────────────────────────────────
     fun setWordPressSiteUrl(url: String) = prefs.edit { putString("wp_site_url", url) }
     fun getWordPressSiteUrl(): String = prefs.getString("wp_site_url", "") ?: ""
     fun setWordPressUsername(u: String) = prefs.edit { putString("wp_username", u) }
@@ -120,5 +135,4 @@ class ApiKeyManager(context: Context) {
 
     fun setWordPressAdsCode(code: String) = prefs.edit { putString("wp_ads_code", code) }
     fun getWordPressAdsCode(): String = prefs.getString("wp_ads_code", "") ?: ""
-
 }
