@@ -26,6 +26,8 @@ import kotlinx.coroutines.withContext
  *   - Gemini and OpenAI NEVER replace each other. Gemini = Writer. OpenAI = Fact Checker.
  *   - Steps 3, 4, 5 are non-fatal — pipeline succeeds even if they fail.
  *   - Only Step 1 failure aborts the pipeline.
+ *
+ * FIX: Default model updated to gemini-2.0-flash (v1 endpoint, no more 404).
  */
 class AiPipeline(private val context: Context) {
 
@@ -37,7 +39,7 @@ class AiPipeline(private val context: Context) {
 
     data class PipelineResult(
         val success: Boolean,
-        val article: Article? = null,           // fully populated Article ready to save / publish
+        val article: Article? = null,
         val finalContent: String = "",
         val title: String = "",
         val geminiDone: Boolean = false,
@@ -66,7 +68,8 @@ class AiPipeline(private val context: Context) {
 
     suspend fun processRssItem(
         rssItem: RssItem,
-        model: String = "gemini-1.5-flash",
+        // ✅ FIX: Default model changed from gemini-1.5-flash → gemini-2.0-flash
+        model: String = GeminiApiClient.DEFAULT_MODEL,
         maxWords: Int = 800,
         wordpressSiteId: Long = 0,
         onProgress: ((PipelineProgress) -> Unit)? = null
@@ -162,8 +165,9 @@ class AiPipeline(private val context: Context) {
 
         onProgress?.invoke(PipelineProgress(Step.COMPLETE, "✅ All steps complete!"))
 
-        // Build fully-populated Article
-        rewrittenTitle = if (focusKeyphrase.isNotBlank()) "${focusKeyphrase.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }}: ${rssItem.title}" else rssItem.title
+        rewrittenTitle = if (focusKeyphrase.isNotBlank())
+            "${focusKeyphrase.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }}: ${rssItem.title}"
+        else rssItem.title
 
         val article = Article(
             title = rewrittenTitle,

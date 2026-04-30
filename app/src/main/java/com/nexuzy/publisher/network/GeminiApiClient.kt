@@ -16,6 +16,9 @@ import java.util.concurrent.TimeUnit
  * Role 2: Generate SEO data (tags, keywords, focus keyphrase, meta description).
  * Supports up to 3 API keys with automatic rotation — no quota token is wasted.
  * OpenAI is NEVER used for writing — only for fact-checking.
+ *
+ * FIX: API base updated from v1beta → v1 (v1beta dropped gemini-1.5-flash support).
+ * Default model updated to gemini-2.0-flash (latest stable as of 2025/2026).
  */
 class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -25,7 +28,11 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         .build()
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
-    private val baseUrl = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    // ✅ FIX: Changed from v1beta → v1. The v1beta endpoint dropped support for
+    // gemini-1.5-flash causing HTTP 404. All stable models (gemini-1.5-flash,
+    // gemini-1.5-pro, gemini-2.0-flash) are available on the v1 endpoint.
+    private val baseUrl = "https://generativelanguage.googleapis.com/v1/models"
 
     data class GeminiResult(
         val success: Boolean,
@@ -36,10 +43,10 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
     data class SeoData(
         val success: Boolean,
-        val tags: List<String> = emptyList(),           // e.g. ["AI", "Technology", "India"]
-        val metaKeywords: String = "",                  // comma-separated for <meta keywords>
-        val focusKeyphrase: String = "",               // primary Yoast/RankMath keyphrase
-        val metaDescription: String = "",             // 155-char SEO description
+        val tags: List<String> = emptyList(),
+        val metaKeywords: String = "",
+        val focusKeyphrase: String = "",
+        val metaDescription: String = "",
         val error: String = ""
     )
 
@@ -51,7 +58,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         rssTitle: String,
         rssDescription: String,
         category: String,
-        model: String = "gemini-1.5-flash",
+        model: String = DEFAULT_MODEL,
         maxWords: Int = 800
     ): GeminiResult {
         val keys = keyManager.getGeminiKeys()
@@ -80,7 +87,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         title: String,
         articleContent: String,
         category: String,
-        model: String = "gemini-1.5-flash"
+        model: String = DEFAULT_MODEL
     ): SeoData {
         val keys = keyManager.getGeminiKeys()
         if (keys.isEmpty()) return SeoData(false, error = "No Gemini keys configured.")
@@ -119,6 +126,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                 if (content.isNotBlank()) GeminiResult(true, content)
                 else GeminiResult(false, "", "Empty response from Gemini")
             } else {
+                Log.e("GeminiClient", "Gemini failed: HTTP ${response.code}: $body")
                 GeminiResult(false, "", "HTTP ${response.code}: $body")
             }
         } catch (e: Exception) {
@@ -170,7 +178,6 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
     private fun parseSeoResponse(raw: String): SeoData {
         return try {
-            // Strip markdown code fences if present
             val cleaned = raw.trim()
                 .removePrefix("```json").removePrefix("```")
                 .removeSuffix("```").trim()
@@ -229,4 +236,12 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         error.contains("429") || error.contains("quota", ignoreCase = true) ||
         error.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
         error.contains("rate limit", ignoreCase = true)
+
+    companion object {
+        // ✅ FIX: Updated from gemini-1.5-flash to gemini-2.0-flash.
+        // gemini-2.0-flash is the current recommended model (faster, more capable,
+        // 1M token context window, available on v1 endpoint).
+        // Fallback: "gemini-1.5-flash" also works on v1 if you prefer.
+        const val DEFAULT_MODEL = "gemini-2.0-flash"
+    }
 }
