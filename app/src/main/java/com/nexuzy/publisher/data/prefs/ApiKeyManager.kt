@@ -9,7 +9,10 @@ import androidx.security.crypto.MasterKey
 /**
  * Manages API keys and integration settings.
  *
- * Keep provider groups stable/append-only to stay merge-friendly across branches.
+ * Key rotation logic:
+ * - getActiveGeminiKey()       → returns current key in rotation
+ * - rotateGeminiKeyOnQuota()   → call on 429/quota error; moves to next key
+ * - withGeminiKeyRotation {}   → auto-retries all keys on quota errors (USE THIS in AiPipeline)
  */
 class ApiKeyManager(context: Context) {
 
@@ -65,9 +68,6 @@ class ApiKeyManager(context: Context) {
     fun getWeatherApiKey(): String = prefs.getString("weather_api_key", "") ?: ""
 
     // ── Google Sign-In Web Client ID ──────────────────────────────────────────
-    // Stored here so LoginActivity never depends on R.string or google-services.json.
-    // Set this value in SettingsActivity or pre-populate from your google-services.json:
-    //   "client_type": 3  →  "client_id": "<YOUR_ID>.apps.googleusercontent.com"
     fun setGoogleWebClientId(id: String) = prefs.edit { putString("google_web_client_id", id) }
     fun getGoogleWebClientId(): String = prefs.getString("google_web_client_id", "") ?: ""
 
@@ -82,22 +82,14 @@ class ApiKeyManager(context: Context) {
         (1..maxKeys).map { getProviderKey(provider, it) }.filter { it.isNotBlank() }
 
     // ── Key rotation ──────────────────────────────────────────────────────────
+
     private fun getCurrentGeminiIndex(): Int = prefs.getInt("gemini_current_index", 0)
-    private fun getCurrentOpenAiIndex(): Int = prefs.getInt("openai_current_index", 0)
+    private fun getCurrentOpenAiIndex(): Int  = prefs.getInt("openai_current_index", 0)
 
     fun getActiveGeminiKey(): String? {
         val keys = getGeminiKeys()
         if (keys.isEmpty()) return null
         return keys[getCurrentGeminiIndex() % keys.size]
-    }
-
-    fun rotateGeminiKey(): String? {
-        val keys = getGeminiKeys()
-        if (keys.isEmpty()) return null
-        val current = getCurrentGeminiIndex()
-        val next = (current + 1) % keys.size
-        prefs.edit { putInt("gemini_current_index", next) }
-        return if (next == 0 && current != 0) null else keys[next]
     }
 
     fun getActiveOpenAiKey(): String? {
@@ -106,13 +98,99 @@ class ApiKeyManager(context: Context) {
         return keys[getCurrentOpenAiIndex() % keys.size]
     }
 
+    /**
+     * Call when you get a 429/quota error on the current Gemini key.
+     * Advances to the next key.
+     * Returns the next key string, or null if all keys have been cycled through.
+     */
+    fun rotateGeminiKeyOnQuota(): String? {
+        val keys = getGeminiKeys()
+        if (keys.isEmpty()) return null
+        val current = getCurrentGeminiIndex()
+        val next    = (current + 1) % keys.size
+        prefs.edit { putInt("gemini_current_index", next) }
+        // If we wrapped back to 0, all keys were exhausted this round
+        return if (next == 0) null else keys[next]
+    }
+
+    // Keep old callers working
+    fun rotateGeminiKey(): String? = rotateGeminiKeyOnQuota()
+
     fun rotateOpenAiKey(): String? {
         val keys = getOpenAiKeys()
         if (keys.isEmpty()) return null
         val current = getCurrentOpenAiIndex()
-        val next = (current + 1) % keys.size
+        val next    = (current + 1) % keys.size
         prefs.edit { putInt("openai_current_index", next) }
-        return if (next == 0 && current != 0) null else keys[next]
+        return if (next == 0) null else keys[next]
+    }
+
+    /**
+     * USE THIS in AiPipeline instead of getActiveGeminiKey().
+     *
+     * Automatically tries every saved Gemini key in order.
+     * If a key returns a 429/quota error it silently rotates to the next key.
+     * Throws only when ALL keys are exhausted.
+     *
+     * Example:
+     *   val text = keyManager.withGeminiKeyRotation { key -> callGeminiApi(key, prompt) }
+     */
+    suspend fun <T> withGeminiKeyRotation(block: suspend (key: String) -> T): T {
+        val keys = getGeminiKeys()
+        require(keys.isNotEmpty()) { "No Gemini API keys configured. Please add keys in Settings." }
+        var lastException: Exception? = null
+        for (i in keys.indices) {
+            val key = keys[(getCurrentGeminiIndex() + i) % keys.size]
+            try {
+                return block(key)
+            } catch (e: Exception) {
+                val msg = e.message?.lowercase() ?: ""
+                val isQuota = msg.contains("429") || msg.contains("quota") ||
+                              msg.contains("exhausted") || msg.contains("resource_exhausted") ||
+                              msg.contains("rate_limit") || msg.contains("too many requests")
+                if (isQuota) {
+                    val nextIdx = (getCurrentGeminiIndex() + i + 1) % keys.size
+                    prefs.edit { putInt("gemini_current_index", nextIdx) }
+                    lastException = e
+                    continue // try next key
+                }
+                throw e // non-quota error — rethrow immediately
+            }
+        }
+        throw lastException
+            ?: Exception("All ${keys.size} Gemini API key(s) exhausted (quota exceeded). Add more keys in Settings.")
+    }
+
+    /**
+     * Same auto-rotation for OpenAI keys.
+     *
+     * Example:
+     *   val result = keyManager.withOpenAiKeyRotation { key -> callOpenAiApi(key, prompt) }
+     */
+    suspend fun <T> withOpenAiKeyRotation(block: suspend (key: String) -> T): T {
+        val keys = getOpenAiKeys()
+        require(keys.isNotEmpty()) { "No OpenAI API keys configured. Please add keys in Settings." }
+        var lastException: Exception? = null
+        for (i in keys.indices) {
+            val key = keys[(getCurrentOpenAiIndex() + i) % keys.size]
+            try {
+                return block(key)
+            } catch (e: Exception) {
+                val msg = e.message?.lowercase() ?: ""
+                val isQuota = msg.contains("429") || msg.contains("quota") ||
+                              msg.contains("insufficient_quota") || msg.contains("rate_limit") ||
+                              msg.contains("too many requests")
+                if (isQuota) {
+                    val nextIdx = (getCurrentOpenAiIndex() + i + 1) % keys.size
+                    prefs.edit { putInt("openai_current_index", nextIdx) }
+                    lastException = e
+                    continue
+                }
+                throw e
+            }
+        }
+        throw lastException
+            ?: Exception("All ${keys.size} OpenAI API key(s) exhausted (quota exceeded). Add more keys in Settings.")
     }
 
     fun resetRotation() {
