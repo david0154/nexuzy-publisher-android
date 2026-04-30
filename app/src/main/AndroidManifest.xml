@@ -26,19 +26,14 @@
             </intent-filter>
         </activity>
 
-        <!-- Login — shown when user is not signed in -->
+        <!-- Login -->
         <activity
             android:name=".ui.auth.LoginActivity"
             android:exported="false"
             android:screenOrientation="portrait"
             android:parentActivityName=".ui.splash.SplashActivity" />
 
-        <!--
-            Main Activity — uses base Theme.NexuzyPublisher (Light.NoActionBar).
-            The old Theme.NexuzyPublisher.NoActionBar sub-style has been removed;
-            the base theme is already NoActionBar, eliminating the
-            IllegalStateException: This Activity already has an action bar crash.
-        -->
+        <!-- Main Activity -->
         <activity
             android:name=".ui.main.MainActivity"
             android:exported="false"
@@ -62,6 +57,14 @@
             android:name=".ui.editor.ArticleEditorActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
+
+        <!-- David AI Chat — in-app AI assistant (no user API key required) -->
+        <activity
+            android:name=".ui.davidai.DavidAiChatActivity"
+            android:exported="false"
+            android:parentActivityName=".ui.main.MainActivity"
+            android:windowSoftInputMode="adjustResize"
+            android:label="David AI" />
 
         <!-- WorkManager init provider -->
         <provider

@@ -11,8 +11,9 @@ import androidx.navigation.ui.setupActionBarWithNavController
 import androidx.navigation.ui.setupWithNavController
 import com.nexuzy.publisher.R
 import com.nexuzy.publisher.databinding.ActivityMainBinding
-import com.nexuzy.publisher.ui.settings.SettingsActivity
 import com.nexuzy.publisher.ui.about.AboutActivity
+import com.nexuzy.publisher.ui.davidai.DavidAiChatActivity
+import com.nexuzy.publisher.ui.settings.SettingsActivity
 
 class MainActivity : AppCompatActivity() {
 
@@ -30,7 +31,13 @@ class MainActivity : AppCompatActivity() {
         val navController = navHostFragment.navController
 
         val appBarConfig = AppBarConfiguration(
-            setOf(R.id.nav_dashboard, R.id.nav_rss, R.id.nav_articles, R.id.nav_ai_writer, R.id.nav_wordpress)
+            setOf(
+                R.id.nav_dashboard,
+                R.id.nav_rss,
+                R.id.nav_articles,
+                R.id.nav_ai_writer,
+                R.id.nav_wordpress
+            )
         )
         setupActionBarWithNavController(navController, appBarConfig)
         binding.bottomNav.setupWithNavController(navController)
@@ -43,6 +50,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
+            R.id.action_david_ai -> {
+                startActivity(Intent(this, DavidAiChatActivity::class.java))
+                true
+            }
             R.id.action_settings -> {
                 startActivity(Intent(this, SettingsActivity::class.java))
                 true
