@@ -5,12 +5,14 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
+import com.nexuzy.publisher.data.prefs.AppPreferences
 import com.nexuzy.publisher.databinding.ActivitySettingsBinding
 
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivitySettingsBinding
     private lateinit var keyManager: ApiKeyManager
+    private lateinit var appPreferences: AppPreferences
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -21,6 +23,7 @@ class SettingsActivity : AppCompatActivity() {
         supportActionBar?.title = "Settings"
 
         keyManager = ApiKeyManager(this)
+        appPreferences = AppPreferences(this)
         loadExistingKeys()
         setupSaveButton()
     }
@@ -40,6 +43,9 @@ class SettingsActivity : AppCompatActivity() {
             etWpSiteUrl.setText(keyManager.getWordPressSiteUrl())
             etWpUsername.setText(keyManager.getWordPressUsername())
             etWpPassword.setText(keyManager.getWordPressPassword())
+            etGoogleWebClientId.setText(appPreferences.googleWebClientId)
+            etSupportEmail.setText(appPreferences.supportEmail)
+            etPrivacyPolicyUrl.setText(appPreferences.privacyPolicyUrl)
         }
 
         // Optional fields (only if XML includes them)
@@ -62,6 +68,10 @@ class SettingsActivity : AppCompatActivity() {
                 keyManager.setWordPressSiteUrl(etWpSiteUrl.text.toString().trim())
                 keyManager.setWordPressUsername(etWpUsername.text.toString().trim())
                 keyManager.setWordPressPassword(etWpPassword.text.toString().trim())
+
+                appPreferences.googleWebClientId = etGoogleWebClientId.text.toString().trim()
+                appPreferences.supportEmail = etSupportEmail.text.toString().trim()
+                appPreferences.privacyPolicyUrl = etPrivacyPolicyUrl.text.toString().trim()
             }
 
             // Optional fields (only if XML includes them)
