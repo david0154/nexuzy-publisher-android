@@ -13,21 +13,29 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * AI Pipeline Orchestrator — matches Python desktop app flow.
+ * AI Pipeline Orchestrator.
  *
- * Flow:
- *   1. Gemini  → writes news article  (3-key rotation)
- *   2. OpenAI  → fact-checks against current knowledge  (3-key rotation)
- *   3. Sarvam  → grammar & spelling correction  (1 key, non-fatal)
- *   4. Gemini  → generates SEO data (tags, keywords, focus keyphrase, meta description)
- *   5. Image   → downloads RSS image to local cache
+ * TWO MODES — chosen based on WHERE in the app we are:
  *
- * Rules:
- *   - Gemini and OpenAI NEVER replace each other. Gemini = Writer. OpenAI = Fact Checker.
- *   - Steps 3, 4, 5 are non-fatal — pipeline succeeds even if they fail.
- *   - Only Step 1 failure aborts the pipeline.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * MODE A: verifyOnlyWithOpenAi(rssItem)   ← called from NewsWorkflowManager
+ *         during bulk fetch / news list display.
  *
- * FIX: Default model updated to gemini-2.0-flash (v1 endpoint, no more 404).
+ *   Uses:   OpenAI only  (quick fact credibility score, no writing)
+ *   Cost:   ~1 OpenAI call per headline checked
+ *   Gemini: NEVER called here   ← SAVES ALL GEMINI QUOTA
+ *
+ * MODE B: processRssItem(rssItem, ...)   ← called ONLY when user taps
+ *         "Write Article" on a specific news item in the editor.
+ *
+ *   Step 1: Gemini  → writes full article
+ *   Step 2: OpenAI  → fact-checks the written article
+ *   Step 3: Sarvam  → grammar & spelling correction
+ *   Step 4: Gemini  → generates SEO metadata
+ *   Step 5: Image   → downloads article image
+ *
+ *   Gemini is called ONLY when the user explicitly requests a write.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 class AiPipeline(private val context: Context) {
 
@@ -36,6 +44,8 @@ class AiPipeline(private val context: Context) {
     private val openAi = OpenAiApiClient(keyManager)
     private val sarvam = SarvamApiClient(keyManager)
     private val imageDownloader = ImageDownloader(context)
+
+    // ─── Result types ─────────────────────────────────────────────────────────
 
     data class PipelineResult(
         val success: Boolean,
@@ -54,6 +64,18 @@ class AiPipeline(private val context: Context) {
         val stepErrors: List<String> = emptyList()
     )
 
+    /**
+     * Lightweight credibility score returned during bulk RSS display.
+     * NO Gemini calls. NO article writing.
+     */
+    data class QuickVerifyResult(
+        val rssItem: RssItem,
+        val credible: Boolean,
+        val confidenceScore: Float,
+        val reason: String,
+        val error: String = ""
+    )
+
     data class PipelineProgress(val step: Step, val message: String)
 
     enum class Step {
@@ -66,9 +88,47 @@ class AiPipeline(private val context: Context) {
         ERROR
     }
 
+    // ─── MODE A: Quick OpenAI verify only (bulk list — NO Gemini) ────────────
+
+    /**
+     * Quickly checks headline credibility via OpenAI.
+     * Called during bulk RSS news list population.
+     * Gemini is NEVER touched here.
+     *
+     * @return QuickVerifyResult with credibility score and reason.
+     */
+    suspend fun verifyOnlyWithOpenAi(rssItem: RssItem): QuickVerifyResult =
+        withContext(Dispatchers.IO) {
+            val result = openAi.factCheckArticle(
+                headline = rssItem.title,
+                content = rssItem.description.ifBlank { rssItem.title }
+            )
+            if (!result.success) {
+                // OpenAI failed — treat as neutral (don't block display)
+                return@withContext QuickVerifyResult(
+                    rssItem = rssItem,
+                    credible = true,
+                    confidenceScore = 0.5f,
+                    reason = "OpenAI check skipped: ${result.error}",
+                    error = result.error
+                )
+            }
+            QuickVerifyResult(
+                rssItem = rssItem,
+                credible = result.isAccurate,
+                confidenceScore = result.confidenceScore,
+                reason = result.feedback
+            )
+        }
+
+    // ─── MODE B: Full pipeline — Gemini write + OpenAI + Sarvam + SEO ────────
+
+    /**
+     * Full AI pipeline. Called ONLY when user taps "Write Article" on a
+     * specific news item. This is the only place Gemini API is ever called.
+     */
     suspend fun processRssItem(
         rssItem: RssItem,
-        // ✅ FIX: Default model changed from gemini-1.5-flash → gemini-2.0-flash
         model: String = GeminiApiClient.DEFAULT_MODEL,
         maxWords: Int = 800,
         wordpressSiteId: Long = 0,
@@ -78,47 +138,47 @@ class AiPipeline(private val context: Context) {
         val stepErrors = mutableListOf<String>()
         var rewrittenTitle = rssItem.title
 
-        // ─── STEP 1: Gemini Writes Article ───
-        onProgress?.invoke(PipelineProgress(Step.GEMINI_WRITING, "📝 Gemini is writing the article…"))
+        // ─── STEP 1: Gemini writes article ───────────────────────────────────
+        onProgress?.invoke(PipelineProgress(Step.GEMINI_WRITING, "\uD83D\uDCDD Gemini is writing the article\u2026"))
         val geminiResult = gemini.writeNewsArticle(
-            rssTitle = rssItem.title,
+            rssTitle       = rssItem.title,
             rssDescription = rssItem.description,
-            category = rssItem.feedCategory,
-            model = model,
-            maxWords = maxWords
+            category       = rssItem.feedCategory,
+            model          = model,
+            maxWords       = maxWords
         )
         if (!geminiResult.success) {
             Log.e("AiPipeline", "Gemini failed: ${geminiResult.error}")
             return@withContext PipelineResult(
                 success = false,
-                title = rewrittenTitle,
-                error = "Gemini writing failed: ${geminiResult.error}"
+                title   = rewrittenTitle,
+                error   = geminiResult.error
             )
         }
         var currentContent = geminiResult.content
-        Log.d("AiPipeline", "Gemini wrote ${currentContent.length} chars (key #${geminiResult.keyUsed})")
+        Log.d("AiPipeline", "Gemini wrote ${currentContent.length} chars (key #${geminiResult.keyUsed}, model=${geminiResult.modelUsed})")
 
-        // ─── STEP 2: OpenAI Fact Checks ───
-        onProgress?.invoke(PipelineProgress(Step.OPENAI_CHECKING, "🔍 OpenAI is verifying facts against current news…"))
+        // ─── STEP 2: OpenAI fact-checks the written article ──────────────────
+        onProgress?.invoke(PipelineProgress(Step.OPENAI_CHECKING, "\uD83D\uDD0D OpenAI verifying facts\u2026"))
         val openAiResult = openAi.factCheckArticle(rssItem.title, currentContent)
-        var factCheckPassed = false
+        var factCheckPassed  = false
         var factCheckFeedback = ""
-        var confidenceScore = 0f
+        var confidenceScore   = 0f
         if (openAiResult.success) {
-            factCheckPassed = openAiResult.isAccurate
+            factCheckPassed   = openAiResult.isAccurate
             factCheckFeedback = openAiResult.feedback
-            confidenceScore = openAiResult.confidenceScore
+            confidenceScore   = openAiResult.confidenceScore
             if (!openAiResult.isAccurate && openAiResult.correctedContent.isNotBlank()) {
                 currentContent = openAiResult.correctedContent
                 Log.d("AiPipeline", "OpenAI corrected content (key #${openAiResult.keyUsed})")
             }
         } else {
             stepErrors.add("OpenAI: ${openAiResult.error}")
-            Log.w("AiPipeline", "OpenAI fact check skipped: ${openAiResult.error}")
+            Log.w("AiPipeline", "OpenAI fact-check skipped: ${openAiResult.error}")
         }
 
-        // ─── STEP 3: Sarvam Grammar & Spelling ───
-        onProgress?.invoke(PipelineProgress(Step.SARVAM_CHECKING, "✏️ Sarvam AI checking grammar & spelling…"))
+        // ─── STEP 3: Sarvam grammar & spelling correction ────────────────────
+        onProgress?.invoke(PipelineProgress(Step.SARVAM_CHECKING, "\u270F\uFE0F Sarvam AI checking grammar\u2026"))
         val sarvamResult = sarvam.checkGrammarAndSpelling(currentContent)
         if (sarvamResult.success && sarvamResult.correctedText.isNotBlank()) {
             currentContent = sarvamResult.correctedText
@@ -126,87 +186,82 @@ class AiPipeline(private val context: Context) {
             stepErrors.add("Sarvam: ${sarvamResult.error}")
         }
 
-        // ─── STEP 4: Gemini SEO Generation ───
-        onProgress?.invoke(PipelineProgress(Step.SEO_GENERATING, "🔎 Generating SEO tags, keywords & meta…"))
+        // ─── STEP 4: Gemini generates SEO metadata ───────────────────────────
+        onProgress?.invoke(PipelineProgress(Step.SEO_GENERATING, "\uD83D\uDD0E Generating SEO tags\u2026"))
         val seoResult = gemini.generateSeoData(
-            title = rewrittenTitle,
+            title          = rewrittenTitle,
             articleContent = currentContent,
-            category = rssItem.feedCategory,
-            model = model
+            category       = rssItem.feedCategory,
+            model          = model
         )
-        var tags = ""
-        var metaKeywords = ""
-        var focusKeyphrase = ""
-        var metaDescription = ""
-        var seoDone = false
+        var tags             = ""
+        var metaKeywords     = ""
+        var focusKeyphrase   = ""
+        var metaDescription  = ""
+        var seoDone          = false
         if (seoResult.success) {
-            tags = seoResult.tags.joinToString(", ")
-            metaKeywords = seoResult.metaKeywords
-            focusKeyphrase = seoResult.focusKeyphrase
+            tags            = seoResult.tags.joinToString(", ")
+            metaKeywords    = seoResult.metaKeywords
+            focusKeyphrase  = seoResult.focusKeyphrase
             metaDescription = seoResult.metaDescription
             seoDone = true
-            Log.d("AiPipeline", "SEO generated: keyphrase='$focusKeyphrase' tags=$tags")
+            Log.d("AiPipeline", "SEO: keyphrase='$focusKeyphrase' tags=$tags")
         } else {
             stepErrors.add("SEO: ${seoResult.error}")
-            Log.w("AiPipeline", "SEO generation failed: ${seoResult.error}")
         }
 
-        // ─── STEP 5: Download RSS Image ───
+        // ─── STEP 5: Download RSS article image ──────────────────────────────
         var localImagePath = ""
         if (rssItem.imageUrl.isNotBlank()) {
-            onProgress?.invoke(PipelineProgress(Step.IMAGE_DOWNLOADING, "🖼️ Downloading article image…"))
+            onProgress?.invoke(PipelineProgress(Step.IMAGE_DOWNLOADING, "\uD83D\uDDBC\uFE0F Downloading article image\u2026"))
             localImagePath = imageDownloader.downloadImage(rssItem.imageUrl, rssItem.title)
-            if (localImagePath.isBlank()) {
-                stepErrors.add("Image download failed for ${rssItem.imageUrl}")
-            } else {
-                Log.d("AiPipeline", "Image downloaded to $localImagePath")
-            }
+            if (localImagePath.isBlank()) stepErrors.add("Image download failed: ${rssItem.imageUrl}")
         }
 
-        onProgress?.invoke(PipelineProgress(Step.COMPLETE, "✅ All steps complete!"))
+        onProgress?.invoke(PipelineProgress(Step.COMPLETE, "\u2705 All steps complete!"))
 
         rewrittenTitle = if (focusKeyphrase.isNotBlank())
             "${focusKeyphrase.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }}: ${rssItem.title}"
         else rssItem.title
 
         val article = Article(
-            title = rewrittenTitle,
-            content = currentContent,
-            summary = metaDescription.ifBlank { rssItem.description.ifBlank { currentContent.take(160) } },
-            category = rssItem.feedCategory,
-            tags = tags,
-            metaKeywords = metaKeywords,
-            focusKeyphrase = focusKeyphrase,
-            metaDescription = metaDescription,
-            sourceUrl = rssItem.link,
-            sourceName = rssItem.feedName,
-            imageUrl = rssItem.imageUrl,
-            imagePath = localImagePath,
-            status = "draft",
-            wordpressSiteId = wordpressSiteId,
-            geminiChecked = true,
-            openaiChecked = openAiResult.success,
-            sarvamChecked = sarvamResult.success,
-            factCheckPassed = factCheckPassed,
+            title            = rewrittenTitle,
+            content          = currentContent,
+            summary          = metaDescription.ifBlank { rssItem.description.ifBlank { currentContent.take(160) } },
+            category         = rssItem.feedCategory,
+            tags             = tags,
+            metaKeywords     = metaKeywords,
+            focusKeyphrase   = focusKeyphrase,
+            metaDescription  = metaDescription,
+            sourceUrl        = rssItem.link,
+            sourceName       = rssItem.feedName,
+            imageUrl         = rssItem.imageUrl,
+            imagePath        = localImagePath,
+            status           = "draft",
+            wordpressSiteId  = wordpressSiteId,
+            geminiChecked    = true,
+            openaiChecked    = openAiResult.success,
+            sarvamChecked    = sarvamResult.success,
+            factCheckPassed  = factCheckPassed,
             factCheckFeedback = factCheckFeedback,
-            confidenceScore = confidenceScore,
-            aiProvider = "gemini"
+            confidenceScore  = confidenceScore,
+            aiProvider       = "gemini"
         )
 
         PipelineResult(
-            success = true,
-            article = article,
-            finalContent = currentContent,
-            title = rewrittenTitle,
-            geminiDone = true,
-            openAiDone = openAiResult.success,
-            sarvamDone = sarvamResult.success,
-            seoDone = seoDone,
-            factCheckPassed = factCheckPassed,
+            success           = true,
+            article           = article,
+            finalContent      = currentContent,
+            title             = rewrittenTitle,
+            geminiDone        = true,
+            openAiDone        = openAiResult.success,
+            sarvamDone        = sarvamResult.success,
+            seoDone           = seoDone,
+            factCheckPassed   = factCheckPassed,
             factCheckFeedback = factCheckFeedback,
-            grammarIssues = sarvamResult.issuesFound,
-            confidenceScore = confidenceScore,
-            stepErrors = stepErrors
+            grammarIssues     = sarvamResult.issuesFound,
+            confidenceScore   = confidenceScore,
+            stepErrors        = stepErrors
         )
     }
 }
