@@ -142,8 +142,11 @@ class RssFeedParser {
      * For items missing an image, scrape the article URL for og:image / twitter:image / first <img>
      */
     private fun resolveImages(items: List<RssItem>): List<RssItem> {
+        var scrapeBudget = 5
         return items.map { item ->
             if (item.imageUrl.isNotBlank()) return@map item
+            if (scrapeBudget <= 0) return@map item
+            scrapeBudget -= 1
             try {
                 val scraped = scrapeImageFromUrl(item.link)
                 if (scraped.isNotBlank()) item.copy(imageUrl = scraped) else item

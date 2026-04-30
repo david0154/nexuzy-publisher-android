@@ -12,14 +12,13 @@ import com.nexuzy.publisher.ui.main.MainActivity
 class SplashActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val splashScreen = installSplashScreen()
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_splash)
 
-        // Navigate to MainActivity after 2.5 seconds
         Handler(Looper.getMainLooper()).postDelayed({
             startActivity(Intent(this, MainActivity::class.java))
             finish()
-        }, 2500)
+        }, 1200)
     }
 }
