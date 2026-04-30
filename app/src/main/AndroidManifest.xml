@@ -14,7 +14,7 @@
         android:supportsRtl="true"
         android:networkSecurityConfig="@xml/network_security_config">
 
-        <!-- Splash Screen Activity -->
+        <!-- Splash Screen — LAUNCHER entry point -->
         <activity
             android:name=".ui.splash.SplashActivity"
             android:exported="true"
@@ -26,37 +26,44 @@
             </intent-filter>
         </activity>
 
+        <!-- Login — shown when user is not signed in -->
         <activity
             android:name=".ui.auth.LoginActivity"
             android:exported="false"
+            android:screenOrientation="portrait"
             android:parentActivityName=".ui.splash.SplashActivity" />
 
-        <!-- Main Activity — NoActionBar theme required to use custom Toolbar -->
+        <!--
+            Main Activity — uses base Theme.NexuzyPublisher (Light.NoActionBar).
+            The old Theme.NexuzyPublisher.NoActionBar sub-style has been removed;
+            the base theme is already NoActionBar, eliminating the
+            IllegalStateException: This Activity already has an action bar crash.
+        -->
         <activity
             android:name=".ui.main.MainActivity"
             android:exported="false"
-            android:theme="@style/Theme.NexuzyPublisher.NoActionBar"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- Settings Activity -->
+        <!-- Settings -->
         <activity
             android:name=".ui.settings.SettingsActivity"
             android:exported="false"
-            android:parentActivityName=".ui.main.MainActivity" />
+            android:parentActivityName=".ui.main.MainActivity"
+            android:windowSoftInputMode="adjustResize" />
 
-        <!-- About Activity -->
+        <!-- About -->
         <activity
             android:name=".ui.about.AboutActivity"
             android:exported="false"
             android:parentActivityName=".ui.main.MainActivity" />
 
-        <!-- Article Editor Activity -->
+        <!-- Article Editor -->
         <activity
             android:name=".ui.editor.ArticleEditorActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustResize" />
 
-        <!-- Background Sync Worker -->
+        <!-- WorkManager init provider -->
         <provider
             android:name="androidx.startup.InitializationProvider"
             android:authorities="${applicationId}.androidx-startup"

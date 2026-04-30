@@ -1,35 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.NexuzyPublisher" parent="Theme.MaterialComponents.DayNight.DarkActionBar">
+    <!--
+        Base app theme.
+        Parent changed from DayNight.DarkActionBar → Light.NoActionBar.
+        Reason:
+          1) Fixes IllegalStateException crash in MainActivity (duplicate action bar):
+             calling setSupportActionBar() while window decor already provides one.
+          2) Fixes unreadable text in SettingsActivity: DayNight was switching backgrounds
+             to dark while our color tokens (text_primary #28251d) stayed dark → invisible.
+          3) All activities now share a single consistent light theme; custom Toolbars
+             are used throughout.
+    -->
+    <style name="Theme.NexuzyPublisher" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="colorPrimary">@color/primary</item>
         <item name="colorPrimaryDark">@color/primary_dark</item>
         <item name="colorAccent">@color/accent</item>
         <item name="android:windowBackground">@color/background</item>
         <item name="android:textColorPrimary">@color/text_primary</item>
         <item name="android:textColorSecondary">@color/text_secondary</item>
+        <item name="android:textColorHint">@color/text_hint</item>
+        <item name="android:editTextColor">@color/text_primary</item>
+        <item name="editTextColor">@color/text_primary</item>
+        <item name="android:textColorPrimaryInverse">@color/text_inverse</item>
     </style>
 
+    <!--
+        Splash screen theme using AndroidX Core SplashScreen API.
+        windowSplashScreenAnimatedIcon → your app_logo drawable.
+        postSplashScreenTheme → main app theme applied after splash dismisses.
+    -->
     <style name="Theme.NexuzyPublisher.SplashScreen" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/splash_background</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/app_logo</item>
-        <item name="windowSplashScreenAnimationDuration">2000</item>
+        <item name="windowSplashScreenAnimationDuration">1500</item>
         <item name="postSplashScreenTheme">@style/Theme.NexuzyPublisher</item>
     </style>
 
-    <style name="Theme.NexuzyPublisher.NoActionBar" parent="Theme.NexuzyPublisher">
-        <item name="windowActionBar">false</item>
-        <item name="windowNoTitle">true</item>
-    </style>
-
+    <!-- Card component style -->
     <style name="CardStyle" parent="Widget.MaterialComponents.CardView">
         <item name="cardCornerRadius">12dp</item>
         <item name="cardElevation">2dp</item>
         <item name="cardBackgroundColor">@color/surface</item>
     </style>
 
+    <!-- Primary button style -->
     <style name="ButtonPrimary" parent="Widget.MaterialComponents.Button">
         <item name="backgroundTint">@color/primary</item>
         <item name="android:textColor">@color/white</item>
         <item name="cornerRadius">8dp</item>
+    </style>
+
+    <!-- Input field style with readable text -->
+    <style name="InputField" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+        <item name="boxStrokeColor">@color/primary</item>
+        <item name="hintTextColor">@color/primary</item>
+        <item name="android:textColorHint">@color/text_hint</item>
     </style>
 </resources>
