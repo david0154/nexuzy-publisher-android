@@ -61,19 +61,18 @@ class RssFragment : Fragment() {
 
         val db = AppDatabase.getDatabase(requireContext())
 
-        // ── STEP 1: Ensure default feeds are always present ───────────────────
-        // Run seedIfEmpty every time the fragment loads. It is a fast no-op when
-        // all default feeds are already in the DB (URL-based dedup inside seeder).
+        // ── STEP 1: Seed / sync 80 default feeds ─────────────────────────────
         viewLifecycleOwner.lifecycleScope.launch {
             withContext(Dispatchers.IO) {
                 DefaultFeedsSeeder.seedIfEmpty(requireContext())
             }
-            // Show active feed count as a toast after seeding
+            val ctx = context ?: return@launch          // guard: fragment may have detached
             val activeCount = withContext(Dispatchers.IO) {
                 db.rssFeedDao().getActiveCount()
             }
+            if (!isAdded) return@launch
             Toast.makeText(
-                requireContext(),
+                ctx,
                 "\u2705 $activeCount active feeds ready to fetch",
                 Toast.LENGTH_SHORT
             ).show()
@@ -82,9 +81,6 @@ class RssFragment : Fragment() {
         // ── STEP 2: Observe live feed list ────────────────────────────────────
         db.rssFeedDao().getAllFeeds().observe(viewLifecycleOwner) { feeds ->
             adapter.submitList(feeds)
-
-            // Only try Firestore restore when DB is truly empty
-            // (after seeder ran — means user has no default AND no cloud feeds)
             if (feeds.isEmpty()) {
                 restoreFeedsFromFirebase(db)
             }
@@ -142,6 +138,7 @@ class RssFragment : Fragment() {
                             )
                         }
                     }
+                    if (!isAdded) return@launch
                     newsViewModel.setWpCategories(cats)
                     binding.btnLoadWpCategories.isEnabled = true
                     binding.btnLoadWpCategories.text = "\uD83D\uDCC2 Load"
@@ -155,6 +152,7 @@ class RssFragment : Fragment() {
                     ).show()
                     binding.actvFeedCategory.showDropDown()
                 } catch (e: Exception) {
+                    if (!isAdded) return@launch
                     binding.btnLoadWpCategories.isEnabled = true
                     binding.btnLoadWpCategories.text = "\uD83D\uDCC2 Load"
                     binding.tvCategoryStatus.text = "\u274C Failed: ${e.message}"
@@ -210,6 +208,7 @@ class RssFragment : Fragment() {
                         category = category
                     )
                 }
+                if (!isAdded) return@launch
                 binding.etFeedName.setText("")
                 binding.etFeedUrl.setText("")
                 binding.actvFeedCategory.setText("")
@@ -224,10 +223,10 @@ class RssFragment : Fragment() {
         // ── Fetch Latest News ─────────────────────────────────────────────────
         binding.btnFetchLatestNews.setOnClickListener {
             viewLifecycleOwner.lifecycleScope.launch {
-                // Make sure feeds exist before fetching
                 val activeCount = withContext(Dispatchers.IO) {
                     db.rssFeedDao().getActiveCount()
                 }
+                if (!isAdded) return@launch
                 if (activeCount == 0) {
                     Toast.makeText(
                         requireContext(),
@@ -244,6 +243,10 @@ class RssFragment : Fragment() {
                 try {
                     val snapshot = withContext(Dispatchers.IO) {
                         NewsWorkflowManager(requireContext()).fetchTodayHotNews(limitPerFeed = 20)
+                    }
+                    if (!isAdded) {
+                        newsViewModel.setFetching(false)
+                        return@launch
                     }
                     newsViewModel.setSnapshot(snapshot)
                     newsViewModel.setFetching(false)
@@ -267,6 +270,7 @@ class RssFragment : Fragment() {
                         findNavController().navigate(R.id.nav_dashboard)
                     }
                 } catch (e: Exception) {
+                    if (!isAdded) return@launch
                     newsViewModel.setFetching(false)
                     Toast.makeText(
                         requireContext(),
@@ -287,6 +291,7 @@ class RssFragment : Fragment() {
             launch(Dispatchers.IO) {
                 firestoreRepo.deleteRssFeedFromFirestore(feed.id.toString())
             }
+            if (!isAdded) return@launch
             Toast.makeText(requireContext(), "RSS feed deleted", Toast.LENGTH_SHORT).show()
         }
     }
@@ -298,6 +303,7 @@ class RssFragment : Fragment() {
                 val cloudFeeds = withContext(Dispatchers.IO) {
                     firestoreRepo.loadRssFeedsFromFirestore()
                 }
+                if (!isAdded) return@launch
                 if (cloudFeeds.isNotEmpty()) {
                     withContext(Dispatchers.IO) {
                         cloudFeeds.forEach { entry ->
@@ -311,19 +317,18 @@ class RssFragment : Fragment() {
                             )
                         }
                     }
+                    if (!isAdded) return@launch
                     Toast.makeText(
                         requireContext(),
                         "\uD83D\uDD04 ${cloudFeeds.size} RSS feeds restored from your account",
                         Toast.LENGTH_LONG
                     ).show()
                 } else {
-                    // Firestore also empty — seed defaults as last resort
                     withContext(Dispatchers.IO) {
                         DefaultFeedsSeeder.seedIfEmpty(requireContext())
                     }
                 }
             } catch (e: Exception) {
-                // Network error — seed defaults so the app is still usable offline
                 withContext(Dispatchers.IO) {
                     DefaultFeedsSeeder.seedIfEmpty(requireContext())
                 }
