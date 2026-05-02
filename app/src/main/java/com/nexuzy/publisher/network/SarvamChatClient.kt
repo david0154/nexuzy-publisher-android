@@ -21,18 +21,18 @@ import java.util.concurrent.TimeUnit
 /**
  * SarvamChatClient — David AI in-app assistant.
  *
+ * FIX: API key is NO LONGER hardcoded here.
+ *      The key is read from ApiKeyManager (Settings → Sarvam API Key).
+ *      Pass the key via chat(history, sarvamKey = apiKeyManager.getSarvamKey())
+ *
  * ROUTING ORDER per user message:
  *  0. Greeting / tiny msg  → instant short reply (no API call)
  *  1. Cricket/IPL query    → cricapi.com free API  → fallback DDG
  *  2. Weather query        → open-meteo.com
  *  3. Everything else      → DDG HTML scrape for live context
  *                            → Sarvam AI gets both the question + web context
- *                              so it always answers with current data
  */
 object SarvamChatClient {
-
-    // ─── Replace with your real Sarvam developer API key ────────────────────
-    private const val DEV_API_KEY = "your-sarvam-dev-key-here"
 
     private const val SARVAM_URL = "https://api.sarvam.ai/v1/chat/completions"
     private const val MODEL      = "sarvam-m"
@@ -59,8 +59,6 @@ object SarvamChatClient {
     }
 
     // ─── Greeting detector ───────────────────────────────────────────────────
-    // Matches very short or casual messages that need NO internet search.
-    // Returns a warm 1-line reply instantly without calling any API.
 
     private val GREETINGS = setOf(
         "hi", "hello", "hey", "hii", "helo", "sup", "yo",
@@ -95,83 +93,82 @@ object SarvamChatClient {
                 else -> "Hey! How can I help you?"
             }
         }
-        // Also catch messages ≤ 3 words that are just emojis or stickers
         if (clean.length <= 6 && clean.all { !it.isLetterOrDigit() || it.isWhitespace() })
             return "How can I help? 😊"
         return null
     }
 
     // ─── Main entry point ────────────────────────────────────────────────────
+    // sarvamKey: pass apiKeyManager.getSarvamKey() from the calling activity.
 
-    suspend fun chat(history: List<Pair<String, String>>): ChatResult =
-        withContext(Dispatchers.IO) {
+    suspend fun chat(
+        history: List<Pair<String, String>>,
+        sarvamKey: String = ""
+    ): ChatResult = withContext(Dispatchers.IO) {
 
-            val userMessage = history.lastOrNull { it.first == "user" }?.second?.trim() ?: ""
+        val userMessage = history.lastOrNull { it.first == "user" }?.second?.trim() ?: ""
 
-            // Step 0 — Greeting? Reply instantly, no API.
-            val gReply = greetingReply(userMessage)
-            if (gReply != null) return@withContext ChatResult(true, gReply)
+        // Step 0 — Greeting? Reply instantly, no API.
+        val gReply = greetingReply(userMessage)
+        if (gReply != null) return@withContext ChatResult(true, gReply)
 
-            // Step 1 — Cricket/IPL → cricapi live data
-            if (isCricketQuery(userMessage)) {
-                val result = fetchCricketInfo(userMessage)
-                if (result.success) return@withContext result
-            }
-
-            // Step 2 — Weather → open-meteo
-            if (isWeatherQuery(userMessage)) {
-                val city = extractCity(userMessage)
-                return@withContext fetchWeather(city)
-            }
-
-            // Step 3 — Everything else:
-            //   a) Search the web for context (always, not just for trigger words)
-            //   b) If Sarvam key is set → pass context + question to Sarvam for a clean answer
-            //   c) If no key → return raw web snippets directly
-
-            val webContext = fetchWebContext(userMessage)  // always fetch web context
-
-            if (DEV_API_KEY == "your-sarvam-dev-key-here" || DEV_API_KEY.isBlank()) {
-                // No Sarvam key — just return the web snippets
-                return@withContext if (webContext.isNotBlank())
-                    ChatResult(true, webContext)
-                else
-                    ChatResult(false, error = "David AI is not yet configured. Set the developer API key.")
-            }
-
-            // Sarvam AI — inject web context into the prompt
-            try {
-                val request = Request.Builder()
-                    .url(SARVAM_URL)
-                    .addHeader("api-subscription-key", DEV_API_KEY)
-                    .addHeader("Content-Type", "application/json")
-                    .post(buildChatBody(history, webContext).toRequestBody(jsonMedia))
-                    .build()
-
-                val response = http.newCall(request).execute()
-                val body     = response.body?.string() ?: ""
-
-                if (response.isSuccessful) {
-                    val reply = parseReply(body)
-                    if (reply.isNotBlank()) ChatResult(true, reply)
-                    else ChatResult(false, error = "Empty response from Sarvam AI")
-                } else {
-                    Log.w("SarvamChat", "HTTP ${response.code}: $body")
-                    // Fallback: return raw web context if Sarvam fails
-                    if (webContext.isNotBlank()) ChatResult(true, webContext)
-                    else ChatResult(false, error = "Server error (HTTP ${response.code})")
-                }
-            } catch (e: Exception) {
-                Log.e("SarvamChat", "Chat error: ${e.message}")
-                if (webContext.isNotBlank()) ChatResult(true, webContext)
-                else ChatResult(false, error = e.message ?: "Network error")
-            }
+        // Step 1 — Cricket/IPL → cricapi live data
+        if (isCricketQuery(userMessage)) {
+            val result = fetchCricketInfo(userMessage)
+            if (result.success) return@withContext result
         }
 
-    // ─── Web context fetcher (always called for non-greeting questions) ──────
-    // Searches DuckDuckGo HTML and returns up to 800 chars of snippets.
-    // This raw context is then injected into the Sarvam system prompt so
-    // the AI always answers from fresh internet data, not training data.
+        // Step 2 — Weather → open-meteo
+        if (isWeatherQuery(userMessage)) {
+            val city = extractCity(userMessage)
+            return@withContext fetchWeather(city)
+        }
+
+        // Step 3 — Web context + Sarvam
+        val webContext = fetchWebContext(userMessage)
+
+        val activeKey = sarvamKey.trim()
+
+        if (activeKey.isBlank()) {
+            // No Sarvam key configured → return web snippets as fallback answer
+            return@withContext if (webContext.isNotBlank())
+                ChatResult(true, webContext)
+            else
+                ChatResult(
+                    false,
+                    error = "Sarvam API key not set. Go to Settings → API Keys → Sarvam and add your key."
+                )
+        }
+
+        // Sarvam AI — inject web context into the prompt
+        try {
+            val request = Request.Builder()
+                .url(SARVAM_URL)
+                .addHeader("api-subscription-key", activeKey)
+                .addHeader("Content-Type", "application/json")
+                .post(buildChatBody(history, webContext).toRequestBody(jsonMedia))
+                .build()
+
+            val response = http.newCall(request).execute()
+            val body     = response.body?.string() ?: ""
+
+            if (response.isSuccessful) {
+                val reply = parseReply(body)
+                if (reply.isNotBlank()) ChatResult(true, reply)
+                else ChatResult(false, error = "Empty response from Sarvam AI")
+            } else {
+                Log.w("SarvamChat", "HTTP ${response.code}: $body")
+                if (webContext.isNotBlank()) ChatResult(true, webContext)
+                else ChatResult(false, error = "Server error (HTTP ${response.code})")
+            }
+        } catch (e: Exception) {
+            Log.e("SarvamChat", "Chat error: ${e.message}")
+            if (webContext.isNotBlank()) ChatResult(true, webContext)
+            else ChatResult(false, error = e.message ?: "Network error")
+        }
+    }
+
+    // ─── Web context fetcher ─────────────────────────────────────────────────
 
     private fun fetchWebContext(query: String): String {
         return try {
@@ -230,7 +227,7 @@ object SarvamChatClient {
 
             val queryLower = query.lowercase()
             val sb = StringBuilder()
-            sb.appendLine("\uD83C\uDFCF **Live Cricket Matches**")
+            sb.appendLine("🏏 **Live Cricket Matches**")
             sb.appendLine()
 
             var found = 0
@@ -249,10 +246,10 @@ object SarvamChatClient {
                 if (!relevant) continue
                 found++
                 sb.appendLine("**$name**")
-                if (status2.isNotBlank()) sb.appendLine("\uD83D\uDFE2 $status2")
-                if (venue.isNotBlank())   sb.appendLine("\uD83C\uDFDF\uFE0F $venue")
-                if (date.isNotBlank())    sb.appendLine("\uD83D\uDCC5 $date")
-                if (ms.isNotBlank())      sb.appendLine("\uD83C\uDFC6 $ms")
+                if (status2.isNotBlank()) sb.appendLine("🟢 $status2")
+                if (venue.isNotBlank())   sb.appendLine("🏟️ $venue")
+                if (date.isNotBlank())    sb.appendLine("📅 $date")
+                if (ms.isNotBlank())      sb.appendLine("🏆 $ms")
 
                 val scores = m.getAsJsonArray("score")
                 if (scores != null) {
@@ -278,7 +275,7 @@ object SarvamChatClient {
         val q = if (query.lowercase().contains("ipl") || query.lowercase().contains("today"))
             "IPL 2026 today match score live" else "$query cricket score live"
         val ctx = fetchWebContext(q)
-        return if (ctx.isNotBlank()) ChatResult(true, "\uD83C\uDFCF $ctx\n\n_Source: DuckDuckGo_")
+        return if (ctx.isNotBlank()) ChatResult(true, "🏏 $ctx\n\n_Source: DuckDuckGo_")
         else ChatResult(false, error = "No cricket data found")
     }
 
@@ -333,28 +330,28 @@ object SarvamChatClient {
             val cur   = wx.getAsJsonObject("current")
             val daily = wx.getAsJsonObject("daily")
 
-            val tempC = cur.get("temperature_2m").asDouble
-            val feelsC = cur.get("apparent_temperature").asDouble
+            val tempC    = cur.get("temperature_2m").asDouble
+            val feelsC   = cur.get("apparent_temperature").asDouble
             val humidity = cur.get("relative_humidity_2m").asInt
-            val wind = cur.get("wind_speed_10m").asDouble
-            val rain = cur.get("precipitation").asDouble
+            val wind     = cur.get("wind_speed_10m").asDouble
+            val rain     = cur.get("precipitation").asDouble
             val condition = weatherCodeToText(cur.get("weather_code").asInt)
-            val maxT = daily.getAsJsonArray("temperature_2m_max")
-            val minT = daily.getAsJsonArray("temperature_2m_min")
+            val maxT  = daily.getAsJsonArray("temperature_2m_max")
+            val minT  = daily.getAsJsonArray("temperature_2m_min")
             val rainD = daily.getAsJsonArray("precipitation_sum")
-            val days = daily.getAsJsonArray("time")
+            val days  = daily.getAsJsonArray("time")
 
             ChatResult(true, buildString {
-                appendLine("\uD83C\uDF24\uFE0F **Weather in $cityName${if (country.isNotBlank()) ", $country" else ""}**")
+                appendLine("🌤️ **Weather in $cityName${if (country.isNotBlank()) ", $country" else ""}**")
                 appendLine()
                 appendLine("**Now:** $condition")
                 appendLine("**Temperature:** ${tempC}°C  (feels like ${feelsC}°C)")
                 appendLine("**Humidity:** $humidity%  •  **Wind:** ${wind} km/h")
                 if (rain > 0) appendLine("**Rain:** ${rain} mm")
                 appendLine()
-                appendLine("\uD83D\uDCC5 **3-Day Forecast:**")
+                appendLine("📅 **3-Day Forecast:**")
                 for (i in 0 until minOf(3, days.size())) {
-                    val sym = if (rainD[i].asDouble > 1.0) "\uD83C\uDF27\uFE0F" else "\u2600\uFE0F"
+                    val sym = if (rainD[i].asDouble > 1.0) "🌧️" else "☀️"
                     appendLine("$sym **${days[i].asString}** — ${maxT[i].asDouble}°C / ${minT[i].asDouble}°C" +
                                if (rainD[i].asDouble > 0) ", rain ${rainD[i].asDouble}mm" else "")
                 }
@@ -366,21 +363,19 @@ object SarvamChatClient {
     }
 
     private fun weatherCodeToText(code: Int) = when (code) {
-        0       -> "Clear sky \u2600\uFE0F"
-        1, 2, 3 -> "Partly cloudy \u26C5"
-        45, 48  -> "Foggy \uD83C\uDF2B\uFE0F"
-        51,53,55-> "Drizzle \uD83C\uDF26\uFE0F"
-        61,63,65-> "Rain \uD83C\uDF27\uFE0F"
-        71,73,75-> "Snow \u2744\uFE0F"
-        80,81,82-> "Rain showers \uD83C\uDF26\uFE0F"
-        95      -> "Thunderstorm \u26C8\uFE0F"
-        96, 99  -> "Thunderstorm with hail \u26C8\uFE0F"
+        0       -> "Clear sky ☀️"
+        1, 2, 3 -> "Partly cloudy ⛅"
+        45, 48  -> "Foggy 🌫️"
+        51,53,55-> "Drizzle 🌦️"
+        61,63,65-> "Rain 🌧️"
+        71,73,75-> "Snow ❄️"
+        80,81,82-> "Rain showers 🌧️"
+        95      -> "Thunderstorm ⛈️"
+        96, 99  -> "Thunderstorm with hail ⛈️"
         else    -> "Unknown ($code)"
     }
 
-    // ─── Sarvam body builder — web context + live date injected ─────────────
-    // webContext: fresh snippets from DDG, injected as LIVE WEB DATA.
-    // Sarvam is told to use this data first before its own training.
+    // ─── Sarvam body builder ─────────────────────────────────────────────────
 
     private fun buildChatBody(
         history: List<Pair<String, String>>,
@@ -428,7 +423,7 @@ object SarvamChatClient {
             addProperty("model", MODEL)
             add("messages", messages)
             addProperty("temperature", 0.5)
-            addProperty("max_tokens", 400)  // keep replies concise
+            addProperty("max_tokens", 400)
         }.toString()
     }
 
