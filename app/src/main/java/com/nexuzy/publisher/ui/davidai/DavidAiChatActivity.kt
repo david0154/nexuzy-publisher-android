@@ -29,8 +29,7 @@ import kotlinx.coroutines.withContext
  * A ChatGPT-style in-app AI assistant branded as "David AI".
  * Powered by Sarvam AI for conversation and Gemini for article generation.
  *
- * FIX: SarvamChatClient.chat() now receives the Sarvam key from ApiKeyManager
- *      so it uses the key the user saved in Settings, not a hardcoded placeholder.
+ * NOTE: SarvamChatClient uses a hardcoded DEV_API_KEY — no key is read from Settings here.
  */
 class DavidAiChatActivity : AppCompatActivity() {
 
@@ -70,7 +69,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         requestLocationAndFetchWeather()
     }
 
-    // ── Weather ────────────────────────────────────────────────────────────────
+    // ── Weather ───────────────────────────────────────────────────────────────────
 
     private fun requestLocationAndFetchWeather() {
         val fine   = Manifest.permission.ACCESS_FINE_LOCATION
@@ -93,7 +92,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
     }
 
-    // ── RecyclerView & Input ─────────────────────────────────────────────────
+    // ── RecyclerView & Input ───────────────────────────────────────────────────────
 
     private fun setupRecyclerView() {
         adapter = ChatMessageAdapter()
@@ -130,7 +129,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         )
     }
 
-    // ── Message sending ────────────────────────────────────────────────────────
+    // ── Message sending ──────────────────────────────────────────────────────────
 
     private fun sendMessage() {
         val text = binding.etMessage.text?.toString()?.trim()
@@ -150,7 +149,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
     }
 
-    // ── Article Generation Handler ───────────────────────────────────────────
+    // ── Article Generation Handler ───────────────────────────────────────────────
 
     private fun handleArticleGeneration(originalText: String, topic: String) {
         val finalTopic = topic.ifBlank {
@@ -184,7 +183,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
     }
 
-    // ── Normal Sarvam Chat Handler ────────────────────────────────────────────
+    // ── Normal Sarvam Chat Handler ───────────────────────────────────────────────
 
     private fun handleNormalChat(text: String) {
         val weatherTriggers = listOf("weather", "temperature", "rain", "sunny", "cold", "hot", "humid", "wind", "forecast", "climate")
@@ -197,15 +196,10 @@ class DavidAiChatActivity : AppCompatActivity() {
         conversationHistory.add(Pair("user", contextualText))
         binding.tvTyping.visibility = View.VISIBLE
 
-        // Read Sarvam key from ApiKeyManager (Settings) — NOT hardcoded
-        val sarvamKey = keyManager.getSarvamKey()
-
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                SarvamChatClient.chat(
-                    history    = conversationHistory.toList(),
-                    sarvamKey  = sarvamKey
-                )
+                // DEV_API_KEY is hardcoded inside SarvamChatClient — no key needed here
+                SarvamChatClient.chat(history = conversationHistory.toList())
             }
 
             binding.tvTyping.visibility = View.GONE
@@ -223,7 +217,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
     }
 
-    // ── Utilities ─────────────────────────────────────────────────────────────
+    // ── Utilities ───────────────────────────────────────────────────────────────────
 
     private fun newChat() {
         conversationHistory.clear()
