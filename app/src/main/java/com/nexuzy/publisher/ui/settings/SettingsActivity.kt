@@ -69,9 +69,6 @@ class SettingsActivity : AppCompatActivity() {
 
             etSarvamKey.setText(keyManager.getSarvamKey())
 
-            etGoogleSearchApiKey.setText(keyManager.getGoogleSearchApiKey())
-            etGoogleSearchCseId.setText(keyManager.getGoogleSearchCseId())
-
             etWpSiteUrl.setText(keyManager.getWordPressSiteUrl())
             etWpUsername.setText(keyManager.getWordPressUsername())
             etWpPassword.setText(keyManager.getWordPressPassword())
@@ -95,9 +92,6 @@ class SettingsActivity : AppCompatActivity() {
                 keyManager.setOpenAiKey(3, etOpenaiKey3.text.toString().trim())
 
                 keyManager.setSarvamKey(etSarvamKey.text.toString().trim())
-
-                keyManager.setGoogleSearchApiKey(etGoogleSearchApiKey.text.toString().trim())
-                keyManager.setGoogleSearchCseId(etGoogleSearchCseId.text.toString().trim())
 
                 keyManager.setWordPressSiteUrl(etWpSiteUrl.text.toString().trim())
                 keyManager.setWordPressUsername(etWpUsername.text.toString().trim())
