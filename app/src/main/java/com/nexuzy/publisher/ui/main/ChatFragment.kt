@@ -7,7 +7,6 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageButton
-import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -27,10 +26,7 @@ import kotlinx.coroutines.launch
  *   - Full chat message history in RecyclerView
  *   - User messages (right-aligned) + AI replies (left-aligned)
  *   - Typing indicator while waiting for AI
- *   - Error recovery: retries on network failure
  *   - Suggested quick prompts for news publishing tasks
- *
- * Layout required: fragment_chat.xml
  */
 class ChatFragment : Fragment() {
 
@@ -52,9 +48,9 @@ class ChatFragment : Fragment() {
             override fun areContentsTheSame(a: ChatMessage, b: ChatMessage) = a == b
         }
     ) {
-        private val USER_TYPE    = 1
-        private val AI_TYPE      = 2
-        private val TYPING_TYPE  = 3
+        private val USER_TYPE   = 1
+        private val AI_TYPE     = 2
+        private val TYPING_TYPE = 3
 
         override fun getItemViewType(position: Int) = when {
             getItem(position).isTyping -> TYPING_TYPE
@@ -74,9 +70,8 @@ class ChatFragment : Fragment() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
             val msg = getItem(position)
             when (holder) {
-                is UserVH  -> holder.bind(msg)
-                is AiVH    -> holder.bind(msg)
-                // TypingVH animates itself, no data needed
+                is UserVH -> holder.bind(msg)
+                is AiVH   -> holder.bind(msg)
             }
         }
     }
@@ -103,10 +98,13 @@ class ChatFragment : Fragment() {
 
     // ─── Fragment state ────────────────────────────────────────────────────────
 
-    private val adapter    = ChatAdapter()
-    private val messages   = mutableListOf<ChatMessage>()
-    private var chatClient: SarvamChatClient? = null
-    private var isWaiting  = false
+    private val chatAdapter = ChatAdapter()
+    private val messages    = mutableListOf<ChatMessage>()
+
+    // Conversation history sent to Sarvam AI: list of (role, content) pairs
+    private val conversationHistory = mutableListOf<Pair<String, String>>()
+
+    private var isWaiting = false
 
     private lateinit var rvMessages: RecyclerView
     private lateinit var etInput: EditText
@@ -119,7 +117,6 @@ class ChatFragment : Fragment() {
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        // Uses fragment_chat layout (create this XML or adapt to your existing layout system)
         return inflater.inflate(R.layout.fragment_chat, container, false)
     }
 
@@ -131,29 +128,24 @@ class ChatFragment : Fragment() {
         btnSend    = view.findViewById(R.id.btnSendMessage)
         tvEmpty    = view.findViewById(R.id.tvChatEmpty)
 
-        chatClient = SarvamChatClient(requireContext())
-
-        // RecyclerView setup
         rvMessages.layoutManager = LinearLayoutManager(requireContext()).apply {
-            stackFromEnd = true   // newest messages at the bottom
+            stackFromEnd = true
         }
-        rvMessages.adapter = adapter
+        rvMessages.adapter = chatAdapter
 
-        // Show welcome message
+        // Welcome message (not added to conversationHistory — just UI)
         addAiMessage(
-            "👋 Hello! I\'m your AI news assistant powered by Sarvam AI.\n\n" +
+            "\uD83D\uDC4B Hello! I'm your AI news assistant powered by Sarvam AI.\n\n" +
             "I can help you with:\n" +
-            "• Rewriting news article headlines\n" +
-            "• Improving article quality\n" +
-            "• Generating SEO tips\n" +
-            "• Answering publishing questions\n\n" +
+            "\u2022 Rewriting news article headlines\n" +
+            "\u2022 Improving article quality\n" +
+            "\u2022 Generating SEO tips\n" +
+            "\u2022 Answering publishing questions\n\n" +
             "What can I help you with today?"
         )
 
-        // Send on button click
         btnSend.setOnClickListener { sendMessage() }
 
-        // Send on keyboard Done
         etInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 sendMessage()
@@ -161,21 +153,19 @@ class ChatFragment : Fragment() {
             } else false
         }
 
-        // Quick prompt chips (if your layout has them)
         setupQuickPrompts(view)
     }
 
     // ─── Quick prompt chips ────────────────────────────────────────────────────
 
     private val quickPrompts = listOf(
-        "📰 How do I write a viral headline?",
-        "🔍 What makes news SEO-friendly?",
-        "📋 Help me rewrite a boring title",
-        "✅ How to fact-check a news article?"
+        "\uD83D\uDCF0 How do I write a viral headline?",
+        "\uD83D\uDD0D What makes news SEO-friendly?",
+        "\uD83D\uDCCB Help me rewrite a boring title",
+        "\u2705 How to fact-check a news article?"
     )
 
     private fun setupQuickPrompts(root: View) {
-        // Bind quick prompt chips if the layout has them with IDs chip_1..chip_4
         val chipIds = listOf(
             resources.getIdentifier("chip_prompt_1", "id", requireContext().packageName),
             resources.getIdentifier("chip_prompt_2", "id", requireContext().packageName),
@@ -205,27 +195,38 @@ class ChatFragment : Fragment() {
         if (isWaiting) return
         isWaiting = true
 
-        // Add user message
+        // Add user message to UI and to conversation history
         addUserMessage(text)
+        conversationHistory.add(Pair("user", text))
         tvEmpty.isVisible = false
 
         // Show typing indicator
         val typingMsg = ChatMessage(text = "", isUser = false, isTyping = true)
         messages.add(typingMsg)
-        adapter.submitList(messages.toList())
+        chatAdapter.submitList(messages.toList())
         scrollToBottom()
 
         lifecycleScope.launch {
             try {
-                val reply = chatClient?.sendMessage(text) ?: "AI assistant is not initialized."
+                // SarvamChatClient is a singleton object — call chat() with full history
+                val result = SarvamChatClient.chat(conversationHistory.toList())
 
-                // Remove typing indicator and add real reply
                 messages.removeAll { it.isTyping }
-                addAiMessage(reply)
+
+                if (result.success) {
+                    // Add AI reply to history so follow-up messages have context
+                    conversationHistory.add(Pair("assistant", result.reply))
+                    addAiMessage(result.reply)
+                } else {
+                    addAiMessage(
+                        "\u274C ${result.error.ifBlank { "Sorry, I couldn't get a response. Check your internet and Sarvam API key in Settings." }}",
+                        isError = true
+                    )
+                }
             } catch (e: Exception) {
                 messages.removeAll { it.isTyping }
                 addAiMessage(
-                    "❌ Sorry, I couldn\'t get a response. Please check your internet connection and Sarvam API key in Settings.",
+                    "\u274C Sorry, I couldn't get a response. Please check your internet connection and Sarvam API key in Settings.",
                     isError = true
                 )
             } finally {
@@ -238,13 +239,13 @@ class ChatFragment : Fragment() {
 
     private fun addUserMessage(text: String) {
         messages.add(ChatMessage(text = text, isUser = true))
-        adapter.submitList(messages.toList())
+        chatAdapter.submitList(messages.toList())
         scrollToBottom()
     }
 
     private fun addAiMessage(text: String, isError: Boolean = false) {
         messages.add(ChatMessage(text = text, isUser = false, isError = isError))
-        adapter.submitList(messages.toList())
+        chatAdapter.submitList(messages.toList())
         scrollToBottom()
     }
 
@@ -255,6 +256,5 @@ class ChatFragment : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        chatClient = null
     }
 }
