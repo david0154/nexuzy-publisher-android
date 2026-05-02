@@ -38,7 +38,7 @@ android {
         viewBinding true
     }
 
-    // Required for LiteRT-LM native libs
+    // Required for MediaPipe / LiteRT native libs
     packagingOptions {
         pickFirst 'lib/x86/libc++_shared.so'
         pickFirst 'lib/x86_64/libc++_shared.so'
@@ -99,10 +99,12 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1'
 
     // ----------------------------------------------------------------
-    // Devil AI 2B - LiteRT-LM (on-device inference via Google AI Edge)
-    // beta2 was removed from Google Maven (HTTP 403) — use beta1
+    // Devil AI - On-device LLM inference
+    // Using MediaPipe Tasks GenAI (stable, on Maven Central)
+    // instead of litert-lm which has unstable Maven availability
+    // Model: load .litertlm/.task file from device storage at runtime
     // ----------------------------------------------------------------
-    implementation 'com.google.ai.edge.litert:litert-lm:1.0.0-beta1'
+    implementation 'com.google.mediapipe:tasks-genai:0.10.14'
 
     // ----------------------------------------------------------------
     // Testing
