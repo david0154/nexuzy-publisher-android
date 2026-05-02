@@ -179,8 +179,8 @@ object DefaultFeedsSeeder {
         f("Nature – Latest Research",    "https://www.nature.com/nature.rss",                                 "Science"),
         f("ScienceDaily",                "https://www.sciencedaily.com/rss/all.xml",                          "Science"),
         f("New Scientist",               "https://www.newscientist.com/feed/home/",                           "Science"),
-        f("Phys.org",                    "https://phys.org/rss-feed/",                                        "Science"),
-        f("Space.com",                   "https://www.space.com/feeds/all",                                   "Science"),
+        f("Scientific American",         "https://rss.sciam.com/ScientificAmerican-Global",                   "Science"),
+        f("Live Science",                "https://www.livescience.com/feeds/all",                             "Science"),
 
         // ══════════════════════════════════════════════════════════════════════
         // SPORTS  (6)
@@ -190,7 +190,7 @@ object DefaultFeedsSeeder {
         f("Sky Sports – Latest",         "https://www.skysports.com/rss/12040",                               "Sports"),
         f("ESPN Cricket",                "https://www.espncricinfo.com/rss/content/story/feeds/0.xml",         "Sports"),
         f("Yahoo Sports",                "https://sports.yahoo.com/rss/",                                     "Sports"),
-        f("Bleacher Report",             "https://bleacherreport.com/articles/feed",                          "Sports"),
+        f("CBS Sports",                  "https://www.cbssports.com/rss/headlines/",                          "Sports"),
 
         // ══════════════════════════════════════════════════════════════════════
         // STOCK MARKET  (5)
@@ -198,7 +198,7 @@ object DefaultFeedsSeeder {
         f("CNBC Markets",                "https://www.cnbc.com/id/20910258/device/rss/rss.html",              "Stock Market"),
         f("Wall Street Journal – Markets","https://feeds.a.dj.com/rss/RSSMarketsMain.xml",                   "Stock Market"),
         f("Seeking Alpha",               "https://seekingalpha.com/feed.xml",                                 "Stock Market"),
-        f("Fox Business",                "https://moxie.foxbusiness.com/google-manager/feeds/latest.xml",     "Stock Market"),
+        f("Investopedia",                "https://www.investopedia.com/feedbuilder/feed/getfeed?feedName=investopedia_headlines", "Stock Market"),
         f("Mint – Markets",              "https://www.livemint.com/rss/markets",                              "Stock Market"),
 
         // ══════════════════════════════════════════════════════════════════════
@@ -207,17 +207,17 @@ object DefaultFeedsSeeder {
         f("TechCrunch",                  "https://techcrunch.com/feed/",                                      "Tech"),
         f("The Verge",                   "https://www.theverge.com/rss/index.xml",                            "Tech"),
         f("Android Authority",           "https://www.androidauthority.com/feed/",                            "Tech"),
-        f("Engadget",                    "https://www.engadget.com/rss.xml",                                  "Tech"),
-        f("Wired",                       "https://www.wired.com/feed/rss",                                    "Tech"),
-        f("Hacker News (top)",           "https://hnrss.org/frontpage",                                       "Tech"),
+        f("Ars Technica",                "https://feeds.arstechnica.com/arstechnica/index",                   "Tech"),
+        f("9to5Google",                  "https://9to5google.com/feed/",                                      "Tech"),
+        f("Tom's Guide",                 "https://www.tomsguide.com/feeds/all",                               "Tech"),
 
         // ══════════════════════════════════════════════════════════════════════
         // TRAVEL  (4)
         // ══════════════════════════════════════════════════════════════════════
-        f("Lonely Planet",               "https://www.lonelyplanet.com/news/feed",                            "Travel"),
-        f("Condé Nast Traveler",         "https://www.cntraveler.com/feed/rss",                               "Travel"),
+        f("Travel + Leisure",            "https://www.travelandleisure.com/rss",                              "Travel"),
+        f("National Geographic Travel",  "https://www.nationalgeographic.com/travel/rss/",                    "Travel"),
         f("The Points Guy",              "https://thepointsguy.com/feed/",                                    "Travel"),
-        f("Condé Nast Traveler UK",      "https://www.cntraveller.com/feed/rss",                              "Travel"),
+        f("Skift",                       "https://skift.com/feed/",                                           "Travel"),
 
         // ══════════════════════════════════════════════════════════════════════
         // WORLD NEWS  (6)
