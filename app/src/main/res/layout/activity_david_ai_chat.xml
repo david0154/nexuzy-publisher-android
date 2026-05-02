@@ -9,7 +9,7 @@
 
     <!-- Toolbar -->
     <androidx.appcompat.widget.Toolbar
-        android:id="@+id/toolbar"
+        android:id="@+id/toolbarDavidAi"
         android:layout_width="0dp"
         android:layout_height="?attr/actionBarSize"
         android:background="@color/surface"
@@ -20,22 +20,36 @@
         app:title="David AI"
         app:titleTextColor="@color/text_primary" />
 
+    <!-- Typing indicator -->
+    <TextView
+        android:id="@+id/tvTyping"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginBottom="4dp"
+        android:text="David AI is typing…"
+        android:textSize="13sp"
+        android:textColor="@color/text_hint"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@+id/inputBarLayout"
+        app:layout_constraintStart_toStartOf="parent" />
+
     <!-- Chat messages -->
     <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/chatRecyclerView"
+        android:id="@+id/rvChat"
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:clipToPadding="false"
         android:paddingBottom="8dp"
         android:scrollbars="none"
-        app:layout_constraintBottom_toTopOf="@+id/inputBar"
+        app:layout_constraintBottom_toTopOf="@+id/tvTyping"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/toolbar" />
+        app:layout_constraintTop_toBottomOf="@+id/toolbarDavidAi" />
 
     <!-- Input bar -->
     <LinearLayout
-        android:id="@+id/inputBar"
+        android:id="@+id/inputBarLayout"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
@@ -50,9 +64,14 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
-        <!-- Text input with keyboard Send action -->
+        <!--
+            imeOptions="actionSend" → keyboard shows a Send key instead of newline.
+            inputType="textMultiLine" keeps multi-line input; the two attributes
+            work together on all Android keyboards (Gboard, Samsung, etc.).
+            User can now press Send on keyboard OR tap the send button.
+        -->
         <EditText
-            android:id="@+id/messageInput"
+            android:id="@+id/etMessage"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -70,9 +89,8 @@
             android:textColor="@color/text_primary"
             android:textColorHint="@color/text_hint" />
 
-        <!-- Send button -->
         <ImageButton
-            android:id="@+id/sendButton"
+            android:id="@+id/btnSend"
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:layout_marginStart="8dp"
