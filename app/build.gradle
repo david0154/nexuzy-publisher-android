@@ -100,9 +100,9 @@ dependencies {
 
     // ----------------------------------------------------------------
     // Devil AI 2B - LiteRT-LM (on-device inference via Google AI Edge)
-    // litert-lm:1.0.1 does not exist on Maven; use the correct stable version
+    // beta2 was removed from Google Maven (HTTP 403) — use beta1
     // ----------------------------------------------------------------
-    implementation 'com.google.ai.edge.litert:litert-lm:1.0.0-beta2'
+    implementation 'com.google.ai.edge.litert:litert-lm:1.0.0-beta1'
 
     // ----------------------------------------------------------------
     // Testing
