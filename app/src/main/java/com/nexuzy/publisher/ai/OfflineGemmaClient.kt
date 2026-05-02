@@ -11,14 +11,13 @@ import java.io.File
  * ══════════════════════════════════════════════════════════════════════
  * On-device LLM using Google Gemma 3n E2B (LiteRT int4).
  *
- * Model file : gemma-3n-E2B-it-int4.litertlm
+ * Model file : gemma-3n-E2B-it-int4.task  (or .litertlm)
  * Source     : huggingface.co/google/gemma-3n-E2B-it-litert-lm
- * Runtime    : LiteRT-LM (google-ai-edge)
+ * Runtime    : MediaPipe Tasks GenAI (com.google.mediapipe:tasks-genai:0.10.14)
  *
  * build.gradle (app):
- *   repositories { maven { url 'https://jitpack.io' } }
  *   dependencies {
- *     implementation 'com.github.google-ai-edge:LiteRT-LM:latest'
+ *     implementation 'com.google.mediapipe:tasks-genai:0.10.14'
  *   }
  *
  * HuggingFace token required (gated model). Save once via:
@@ -34,6 +33,12 @@ class OfflineGemmaClient(private val context: Context) {
         private const val TEMPERATURE = 0.7f
         private const val TOP_K       = 40
         private const val TOP_P       = 0.95f
+
+        // MediaPipe Tasks GenAI class names (com.google.mediapipe:tasks-genai:0.10.14)
+        private const val LLM_INFERENCE_CLASS   = "com.google.mediapipe.tasks.genai.llminference.LlmInference"
+        private const val LLM_OPTIONS_CLASS     = "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions"
+        private const val LLM_OPTIONS_BUILDER   = "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions\$Builder"
+        private const val RESULT_LISTENER_CLASS = "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceResultListener"
     }
 
     private val downloadManager = ModelDownloadManager(context)
@@ -51,8 +56,8 @@ class OfflineGemmaClient(private val context: Context) {
 
     /**
      * Run inference with Devil AI 2B on-device.
-     * Uses LiteRT-LM (google-ai-edge) API via reflection so the app
-     * compiles cleanly even before the dependency is resolved.
+     * Uses MediaPipe Tasks GenAI API via reflection so the app
+     * compiles cleanly even before the dependency resolves.
      */
     suspend fun generate(
         prompt: String,
@@ -70,13 +75,13 @@ class OfflineGemmaClient(private val context: Context) {
         Log.i(TAG, "Inference start | ${getModelFile().name} | maxTokens=$maxTokens")
 
         return@withContext try {
-            runLiteRtLmInference(prompt, maxTokens, onToken)
+            runMediaPipeInference(prompt, maxTokens, onToken)
         } catch (e: ClassNotFoundException) {
-            Log.e(TAG, "LiteRT-LM not in classpath: ${e.message}")
+            Log.e(TAG, "MediaPipe Tasks GenAI not in classpath: ${e.message}")
             GenerateResult(
                 success = false,
-                error   = "LiteRT-LM not found. Add to build.gradle:\n" +
-                          "implementation 'com.github.google-ai-edge:LiteRT-LM:latest'"
+                error   = "MediaPipe Tasks GenAI not found. Add to build.gradle:\n" +
+                          "implementation 'com.google.mediapipe:tasks-genai:0.10.14'"
             )
         } catch (e: Exception) {
             Log.e(TAG, "Inference error: ${e.message}", e)
@@ -85,86 +90,90 @@ class OfflineGemmaClient(private val context: Context) {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // LiteRT-LM inference (google-ai-edge)
+    // MediaPipe Tasks GenAI inference (via reflection)
     //
-    // Java API (reflection-safe):
-    //   com.google.ai.edge.litert.lm.LlmInference
-    //     .createFromPath(context, modelPath, options)
-    //     .generateResponse(prompt)  : String
+    // Java API:
+    //   LlmInference.LlmInferenceOptions (Builder pattern)
+    //     .setModelPath(String)
+    //     .setMaxTokens(Int)
+    //     .build()
+    //
+    //   LlmInference.createFromOptions(context, options) : LlmInference
+    //     .generateResponse(prompt)                       : String
     //     .generateResponseAsync(prompt, listener)
     //     .close()
-    //
-    //   com.google.ai.edge.litert.lm.LlmInferenceOptions (Builder pattern)
-    //     .maxTokens(Int)
-    //     .temperature(Float)
-    //     .topK(Int)
-    //     .topP(Float)
-    //     .build()
     // ──────────────────────────────────────────────────────────────────
 
-    private fun runLiteRtLmInference(
+    private fun runMediaPipeInference(
         prompt: String,
         maxTokens: Int,
         onToken: ((String) -> Unit)?
     ): GenerateResult {
 
         // --- Resolve classes ---
-        val llmCls  = Class.forName("com.google.ai.edge.litert.lm.LlmInference")
-        val optsCls = Class.forName("com.google.ai.edge.litert.lm.LlmInferenceOptions")
-        val bldrCls = Class.forName("com.google.ai.edge.litert.lm.LlmInferenceOptions\$Builder")
+        val llmCls  = Class.forName(LLM_INFERENCE_CLASS)
+        val optsCls = Class.forName(LLM_OPTIONS_CLASS)
+        val bldrCls = Class.forName(LLM_OPTIONS_BUILDER)
 
-        // --- Build options ---
-        val bldr = bldrCls.newInstance()
-        bldrCls.getMethod("maxTokens",   Int::class.java  ).invoke(bldr, maxTokens)
-        bldrCls.getMethod("temperature", Float::class.java).invoke(bldr, TEMPERATURE)
-        bldrCls.getMethod("topK",        Int::class.java  ).invoke(bldr, TOP_K)
-        bldrCls.getMethod("topP",        Float::class.java).invoke(bldr, TOP_P)
+        // --- Build options via Builder ---
+        val bldr = bldrCls
+            .getConstructor()
+            .newInstance()
+        bldrCls.getMethod("setModelPath", String::class.java)
+            .invoke(bldr, getModelFile().absolutePath)
+        bldrCls.getMethod("setMaxTokens", Int::class.java)
+            .invoke(bldr, maxTokens)
+        // temperature, topK, topP — set if methods exist (graceful for older versions)
+        runCatching {
+            bldrCls.getMethod("setTemperature", Float::class.java).invoke(bldr, TEMPERATURE)
+        }
+        runCatching {
+            bldrCls.getMethod("setTopK", Int::class.java).invoke(bldr, TOP_K)
+        }
+        runCatching {
+            bldrCls.getMethod("setTopP", Float::class.java).invoke(bldr, TOP_P)
+        }
         val opts = bldrCls.getMethod("build").invoke(bldr)
 
         // --- Create inference engine ---
         val llm = llmCls
-            .getMethod("createFromPath",
-                Context::class.java,
-                String::class.java,
-                optsCls)
-            .invoke(null, context, getModelFile().absolutePath, opts)
+            .getMethod("createFromOptions", Context::class.java, optsCls)
+            .invoke(null, context, opts)
 
         val sb = StringBuilder()
         try {
             if (onToken != null) {
-                // Streaming via LlmInferenceListener interface
-                val listenerCls = Class.forName(
-                    "com.google.ai.edge.litert.lm.LlmInference\$LlmInferenceListener")
-                val proxy = java.lang.reflect.Proxy.newProxyInstance(
-                    listenerCls.classLoader,
-                    arrayOf(listenerCls)
-                ) { _, method, args ->
-                    when (method.name) {
-                        "onPartialResult" -> {
-                            val token = args?.getOrNull(0)?.toString() ?: ""
-                            sb.append(token)
-                            onToken(token)
+                // Streaming via LlmInferenceResultListener
+                try {
+                    val listenerCls = Class.forName(RESULT_LISTENER_CLASS)
+                    val proxy = java.lang.reflect.Proxy.newProxyInstance(
+                        listenerCls.classLoader,
+                        arrayOf(listenerCls)
+                    ) { _, method, args ->
+                        when (method.name) {
+                            "onPartialResult",
+                            "onResult" -> {
+                                val token = args?.getOrNull(0)?.toString() ?: ""
+                                if (token.isNotBlank()) {
+                                    sb.append(token)
+                                    onToken(token)
+                                }
+                            }
+                            "onError" -> Log.e(TAG, "Streaming error: ${args?.getOrNull(0)}")
                         }
-                        "onResult" -> { /* final callback, ignore — already accumulated */ }
-                        "onError"  -> Log.e(TAG, "Streaming error: ${args?.getOrNull(0)}")
+                        null
                     }
-                    null
+                    llmCls.getMethod("generateResponseAsync", String::class.java, listenerCls)
+                        .invoke(llm, prompt, proxy)
+                } catch (_: ClassNotFoundException) {
+                    // Fallback: synchronous if listener class not found
+                    val out = llmCls.getMethod("generateResponse", String::class.java)
+                        .invoke(llm, prompt) as? String ?: ""
+                    sb.append(out)
+                    onToken(out)
                 }
-                llmCls.getMethod(
-                    "generateResponseAsync",
-                    String::class.java,
-                    listenerCls
-                ).invoke(llm, prompt, proxy)
-
-                // Block until streaming complete via synchronous call on same prompt
-                // (LiteRT-LM queues calls — this will return after the async one)
-                val sync = llmCls
-                    .getMethod("generateResponse", String::class.java)
-                    .invoke(llm, prompt) as? String ?: ""
-                if (sb.isEmpty()) sb.append(sync)
-
             } else {
-                // Synchronous
+                // Synchronous call
                 val out = llmCls
                     .getMethod("generateResponse", String::class.java)
                     .invoke(llm, prompt) as? String ?: ""
