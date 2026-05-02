@@ -16,9 +16,6 @@ import com.nexuzy.publisher.data.model.RssFeed
  *   - China                   : ~10%
  *   - Other international     : balance
  *
- * JiveGlow (jiveglow.com) feeds are included for ALL 14 categories as the
- * primary source. They are marked isDefault=true.
- *
  * Call seedIfEmpty() once on app start — it is a no-op if feeds already exist.
  * Users can delete ANY feed (including defaults) and add their own custom URLs.
  */
@@ -44,7 +41,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // AI & MACHINE LEARNING
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – AI & Machine Learning", "https://jiveglow.com/category/ai-machine-learning/feed/", "AI & Machine Learning"),
         f("MIT Technology Review – AI",       "https://www.technologyreview.com/feed/", "AI & Machine Learning"),
         f("VentureBeat – AI",                 "https://venturebeat.com/category/ai/feed/", "AI & Machine Learning"),
         f("The Verge – AI",                   "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", "AI & Machine Learning"),
@@ -59,7 +55,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // BUSINESS
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Business",              "https://jiveglow.com/category/business/feed/", "Business"),
         f("BBC Business",                     "https://feeds.bbci.co.uk/news/business/rss.xml", "Business"),
         f("Reuters Business",                 "https://feeds.reuters.com/reuters/businessNews", "Business"),
         f("Financial Times",                  "https://www.ft.com/rss/home", "Business"),
@@ -68,13 +63,12 @@ object DefaultFeedsSeeder {
         f("The Economist",                    "https://www.economist.com/business/rss.xml", "Business"),
         f("Harvard Business Review",          "https://hbr.org/stories_rss.xml", "Business"),
         f("Nikkei Asia – Business",           "https://asia.nikkei.com/rss/feed/index", "Business"),
-        f("Arab Business",                    "https://www.arabianbusiness.com/rss", "Business"),
+        f("Arabian Business",                 "https://www.arabianbusiness.com/rss", "Business"),
         f("CNBC Business",                    "https://www.cnbc.com/id/10001147/device/rss/rss.html", "Business"),
 
         // ══════════════════════════════════════════════════════════════════════
         // CAREER
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Career",                "https://jiveglow.com/category/career/feed/", "Career"),
         f("LinkedIn Talent Blog",             "https://www.linkedin.com/blog/talent/rss", "Career"),
         f("Harvard Business Review – Career", "https://hbr.org/stories_rss.xml", "Career"),
         f("The Muse",                         "https://www.themuse.com/advice/rss", "Career"),
@@ -86,7 +80,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // CRYPTOCURRENCY
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Cryptocurrency",        "https://jiveglow.com/category/cryptocurrency/feed/", "Cryptocurrency"),
         f("CoinDesk",                         "https://www.coindesk.com/arc/outboundfeeds/rss/", "Cryptocurrency"),
         f("CoinTelegraph",                    "https://cointelegraph.com/rss", "Cryptocurrency"),
         f("Decrypt",                          "https://decrypt.co/feed", "Cryptocurrency"),
@@ -99,7 +92,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // ECONOMY
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Economy",               "https://jiveglow.com/category/economy/feed/", "Economy"),
         f("Reuters Economy",                  "https://feeds.reuters.com/reuters/businessNews", "Economy"),
         f("IMF News",                         "https://www.imf.org/en/News/rss", "Economy"),
         f("World Bank News",                  "https://www.worldbank.org/en/news/rss", "Economy"),
@@ -113,7 +105,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // FASHION
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Fashion",               "https://jiveglow.com/category/fashion/feed/", "Fashion"),
         f("Vogue",                            "https://www.vogue.com/feed/rss", "Fashion"),
         f("Harper's Bazaar",                  "https://www.harpersbazaar.com/rss/all.xml/", "Fashion"),
         f("WWD",                              "https://wwd.com/feed/", "Fashion"),
@@ -125,7 +116,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // GENERAL
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – General",               "https://jiveglow.com/category/general/feed/", "General"),
         f("BBC News",                         "https://feeds.bbci.co.uk/news/rss.xml", "General"),
         f("Reuters Top News",                 "https://feeds.reuters.com/reuters/topNews", "General"),
         f("AP Top News",                      "https://rsshub.app/ap/topics/apf-topnews", "General"),
@@ -145,7 +135,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // HEALTH
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Health",                "https://jiveglow.com/category/health/feed/", "Health"),
         f("WHO News",                         "https://www.who.int/rss-feeds/news-english.xml", "Health"),
         f("WebMD Health",                     "https://rssfeeds.webmd.com/rss/rss.aspx?RSSSource=RSS_PUBLIC", "Health"),
         f("Healthline News",                  "https://www.healthline.com/rss/news", "Health"),
@@ -159,7 +148,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // POLITICS
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Politics",              "https://jiveglow.com/category/politics/feed/", "Politics"),
         f("Politico",                         "https://www.politico.com/rss/politicopicks.xml", "Politics"),
         f("The Hill",                         "https://thehill.com/rss/syndicator/19109/feed/", "Politics"),
         f("Washington Post – Politics",       "https://feeds.washingtonpost.com/rss/politics", "Politics"),
@@ -174,7 +162,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // SCIENCE
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Science",               "https://jiveglow.com/category/science/feed/", "Science"),
         f("NASA Breaking News",               "https://www.nasa.gov/news-release/feed/", "Science"),
         f("Nature – Latest Research",         "https://www.nature.com/nature.rss", "Science"),
         f("ScienceDaily",                     "https://www.sciencedaily.com/rss/all.xml", "Science"),
@@ -188,7 +175,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // SPORTS
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Sports",                "https://jiveglow.com/category/sports/feed/", "Sports"),
         f("ESPN Top Headlines",               "https://www.espn.com/espn/rss/news", "Sports"),
         f("BBC Sport",                        "https://feeds.bbci.co.uk/sport/rss.xml", "Sports"),
         f("Sky Sports – Latest",              "https://www.skysports.com/rss/12040", "Sports"),
@@ -203,7 +189,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // STOCK MARKET
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Stock Market",          "https://jiveglow.com/category/stock-market/feed/", "Stock Market"),
         f("MarketWatch",                      "https://feeds.marketwatch.com/marketwatch/topstories/", "Stock Market"),
         f("Yahoo Finance",                    "https://finance.yahoo.com/news/rssindex", "Stock Market"),
         f("CNBC Markets",                     "https://www.cnbc.com/id/20910258/device/rss/rss.html", "Stock Market"),
@@ -217,7 +202,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // TECH
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Tech",                  "https://jiveglow.com/category/tech/feed/", "Tech"),
         f("TechCrunch",                       "https://techcrunch.com/feed/", "Tech"),
         f("The Verge",                        "https://www.theverge.com/rss/index.xml", "Tech"),
         f("Ars Technica",                     "https://feeds.arstechnica.com/arstechnica/index", "Tech"),
@@ -233,7 +217,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // TECHNOLOGY
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Technology",            "https://jiveglow.com/category/technology/feed/", "Technology"),
         f("MIT Technology Review",            "https://www.technologyreview.com/feed/", "Technology"),
         f("Wired",                            "https://www.wired.com/feed/rss", "Technology"),
         f("IEEE Spectrum",                    "https://spectrum.ieee.org/feeds/feed.rss", "Technology"),
@@ -249,7 +232,6 @@ object DefaultFeedsSeeder {
         // ══════════════════════════════════════════════════════════════════════
         // TRAVEL
         // ══════════════════════════════════════════════════════════════════════
-        f("JiveGlow – Travel",                "https://jiveglow.com/category/travel/feed/", "Travel"),
         f("Lonely Planet News",               "https://www.lonelyplanet.com/news/feed", "Travel"),
         f("Condé Nast Traveller",             "https://www.cntraveller.com/feed/rss", "Travel"),
         f("National Geographic Travel",       "https://www.nationalgeographic.com/travel/rss", "Travel"),
