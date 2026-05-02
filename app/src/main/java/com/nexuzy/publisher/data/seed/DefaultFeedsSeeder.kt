@@ -26,13 +26,13 @@ object DefaultFeedsSeeder {
     suspend fun seedIfEmpty(context: Context) {
         val db  = AppDatabase.getDatabase(context)
         val dao = db.rssFeedDao()
-        val count = dao.getFeedCount()
+        val count = dao.getCount()          // fixed: was getFeedCount()
         if (count > 0) {
             Log.i(TAG, "DB already has $count feeds — skipping seed.")
             return
         }
         val feeds = buildFeedList()
-        dao.insertAll(feeds)
+        feeds.forEach { dao.insert(it) }    // fixed: was dao.insertAll(feeds)
         Log.i(TAG, "Seeded ${feeds.size} RSS feeds into DB.")
     }
 
