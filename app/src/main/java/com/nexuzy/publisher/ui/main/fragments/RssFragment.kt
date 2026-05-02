@@ -68,12 +68,15 @@ class RssFragment : Fragment() {
             withContext(Dispatchers.IO) {
                 DefaultFeedsSeeder.seedIfEmpty(requireContext())
             }
-            // Show active feed count hint after seeding
+            // Show active feed count as a toast after seeding
             val activeCount = withContext(Dispatchers.IO) {
                 db.rssFeedDao().getActiveCount()
             }
-            binding.tvFeedCount?.text = "$activeCount active feeds ready to fetch"
-            binding.tvFeedCount?.isVisible = true
+            Toast.makeText(
+                requireContext(),
+                "\u2705 $activeCount active feeds ready to fetch",
+                Toast.LENGTH_SHORT
+            ).show()
         }
 
         // ── STEP 2: Observe live feed list ────────────────────────────────────

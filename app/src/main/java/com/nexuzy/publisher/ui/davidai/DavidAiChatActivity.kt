@@ -132,8 +132,8 @@ class DavidAiChatActivity : AppCompatActivity() {
                 content = "Hello! I\'m David AI, your intelligent news assistant created by David and " +
                     "powered by Nexuzy Lab.\n\nI can help you with:\n" +
                     "\u2022 News article writing & ideas\n" +
-                    "\u2022 🌦️ Real-time weather for your location\n" +
-                    "\u2022 📝 Article generation — try: \"generate article about [topic]\"\n" +
+                    "\u2022 \uD83C\uDF26\uFE0F Real-time weather for your location\n" +
+                    "\u2022 \uD83D\uDCDD Article generation — try: \"generate article about [topic]\"\n" +
                     "\u2022 SEO optimization tips\n" +
                     "\u2022 WordPress publishing help\n" +
                     "\u2022 Fact-checking & research\n" +
@@ -172,7 +172,7 @@ class DavidAiChatActivity : AppCompatActivity() {
             // User typed just "generate article" with no topic — ask for it
             setInputEnabled(true)
             adapter.addMessage(ChatMessage(
-                content = "📝 What topic should I write about?\n" +
+                content = "\uD83D\uDCDD What topic should I write about?\n" +
                     "Example: \"generate article about climate change in India\"",
                 isUser = false
             ))
@@ -181,18 +181,17 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
 
         adapter.addMessage(ChatMessage(
-            content = "⏳ Generating article about \"$finalTopic\"... This may take 10-20 seconds.",
+            content = "\u23F3 Generating article about \"$finalTopic\"... This may take 10-20 seconds.",
             isUser = false
         ))
         scrollToBottom()
 
         lifecycleScope.launch {
-            val geminiKey = withContext(Dispatchers.IO) { keyManager.getGeminiKey(1) }
             val draft = withContext(Dispatchers.IO) {
                 ArticleGeneratorClient.generate(
                     topic      = finalTopic,
                     weatherCtx = weatherContext,
-                    apiKey     = geminiKey
+                    keyManager = keyManager
                 )
             }
             setInputEnabled(true)

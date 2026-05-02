@@ -180,7 +180,7 @@ object SarvamChatClient {
             val days     = daily.getAsJsonArray("time")
 
             val reply = buildString {
-                appendLine("🌤️ **Weather in $cityName${if (country.isNotBlank()) ", $country" else ""}**")
+                appendLine("\uD83C\uDF24\uFE0F **Weather in $cityName${if (country.isNotBlank()) ", $country" else ""}**")
                 appendLine()
                 appendLine("**Now:** $condition")
                 appendLine("**Temperature:** ${tempC}°C (feels like ${feelsC}°C)")
@@ -188,13 +188,13 @@ object SarvamChatClient {
                 appendLine("**Wind:** ${wind} km/h")
                 if (rain > 0) appendLine("**Rain:** ${rain} mm")
                 appendLine()
-                appendLine("📅 **3-Day Forecast:**")
+                appendLine("\uD83D\uDCC5 **3-Day Forecast:**")
                 for (i in 0 until minOf(3, days.size())) {
-                    val day  = days[i].asString
-                    val hi   = maxTemps[i].asDouble
-                    val lo   = minTemps[i].asDouble
-                    val rain3= rainDays[i].asDouble
-                    val sym  = if (rain3 > 1.0) "🌧️" else "☀️"
+                    val day   = days[i].asString
+                    val hi    = maxTemps[i].asDouble
+                    val lo    = minTemps[i].asDouble
+                    val rain3 = rainDays[i].asDouble
+                    val sym   = if (rain3 > 1.0) "\uD83C\uDF27\uFE0F" else "\u2600\uFE0F"
                     appendLine("$sym **$day** — ${hi}°C / ${lo}°C${if (rain3 > 0) ", rain ${rain3}mm" else ""}")
                 }
                 appendLine()
@@ -209,15 +209,15 @@ object SarvamChatClient {
     }
 
     private fun weatherCodeToText(code: Int): String = when (code) {
-        0            -> "Clear sky ☀️"
-        1, 2, 3      -> "Partly cloudy ⛅"
-        45, 48       -> "Foggy 🌫️"
-        51, 53, 55   -> "Drizzle 🌦️"
-        61, 63, 65   -> "Rain 🌧️"
-        71, 73, 75   -> "Snow ❄️"
-        80, 81, 82   -> "Rain showers 🌦️"
-        95           -> "Thunderstorm ⛈️"
-        96, 99       -> "Thunderstorm with hail ⛈️"
+        0            -> "Clear sky \u2600\uFE0F"
+        1, 2, 3      -> "Partly cloudy \u26C5"
+        45, 48       -> "Foggy \uD83C\uDF2B\uFE0F"
+        51, 53, 55   -> "Drizzle \uD83C\uDF26\uFE0F"
+        61, 63, 65   -> "Rain \uD83C\uDF27\uFE0F"
+        71, 73, 75   -> "Snow \u2744\uFE0F"
+        80, 81, 82   -> "Rain showers \uD83C\uDF26\uFE0F"
+        95           -> "Thunderstorm \u26C8\uFE0F"
+        96, 99       -> "Thunderstorm with hail \u26C8\uFE0F"
         else         -> "Unknown ($code)"
     }
 
@@ -252,11 +252,11 @@ object SarvamChatClient {
             val abstract_ = json.optString("AbstractText", "")
             val answer    = json.optString("Answer", "")
             val heading   = json.optString("Heading", "")
-            val url_      = json.optString("AbstractURL", "")
+            val sourceUrl = json.optString("AbstractURL", "")
 
             val text = when {
                 answer.isNotBlank()    -> answer
-                abstract_.isNotBlank() -> "**$heading**\n\n$abstract_${if (url_.isNotBlank()) "\n\n_Source: $url__" else ""}"
+                abstract_.isNotBlank() -> "**$heading**\n\n$abstract_${if (sourceUrl.isNotBlank()) "\n\n_Source: ${sourceUrl}_" else ""}"
                 else -> return ChatResult(false, error = "No DDG result")
             }
             ChatResult(true, text)
