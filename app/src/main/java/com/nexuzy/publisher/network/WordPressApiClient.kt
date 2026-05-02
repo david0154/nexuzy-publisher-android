@@ -54,6 +54,11 @@ class WordPressApiClient {
     /**
      * Fetches ALL categories from the WordPress site.
      * Paginates automatically (100 per page) so large sites return everything.
+     *
+     * FIX: WordPress REST API returns category "name" as a plain JSON string,
+     * NOT a JSON object. Calling getAsJsonObject("name") on a primitive throws
+     * IllegalStateException which silently breaks the loop and returns empty list.
+     * Fixed: always use get("name").asString.
      */
     suspend fun fetchCategories(site: WordPressSite): List<WpCategory> =
         withContext(Dispatchers.IO) {
@@ -70,23 +75,31 @@ class WordPressApiClient {
                         .build()
                     val response = client.newCall(request).execute()
                     val body     = response.body?.string() ?: "[]"
-                    if (!response.isSuccessful) break
+                    if (!response.isSuccessful) {
+                        Log.w("WPClient", "fetchCategories HTTP ${response.code} on page $page")
+                        break
+                    }
 
                     val arr = JsonParser.parseString(body).asJsonArray
                     if (arr.size() == 0) break
 
                     for (i in 0 until arr.size()) {
-                        val obj = arr[i].asJsonObject
-                        all.add(
-                            WpCategory(
-                                id       = obj.get("id")?.asLong  ?: 0,
-                                name     = obj.getAsJsonObject("name")?.asString
-                                             ?: obj.get("name")?.asString ?: "",
-                                slug     = obj.get("slug")?.asString   ?: "",
-                                parentId = obj.get("parent")?.asLong   ?: 0,
-                                count    = obj.get("count")?.asInt      ?: 0
+                        try {
+                            val obj = arr[i].asJsonObject
+                            // FIX: "name" is a plain string in WP REST API — use get().asString, NOT getAsJsonObject()
+                            val name = obj.get("name")?.asString ?: ""
+                            all.add(
+                                WpCategory(
+                                    id       = obj.get("id")?.asLong  ?: 0,
+                                    name     = name,
+                                    slug     = obj.get("slug")?.asString   ?: "",
+                                    parentId = obj.get("parent")?.asLong   ?: 0,
+                                    count    = obj.get("count")?.asInt      ?: 0
+                                )
                             )
-                        )
+                        } catch (itemEx: Exception) {
+                            Log.w("WPClient", "Skipping malformed category item $i: ${itemEx.message}")
+                        }
                     }
                     if (arr.size() < 100) break
                     page++
@@ -101,19 +114,6 @@ class WordPressApiClient {
 
     // ─── Publish post ─────────────────────────────────────────────────────────
 
-    /**
-     * Full publish flow:
-     * 1. Validate / create article category on WordPress.
-     * 2. Resolve / create tag IDs.
-     * 3. Upload featured image (local file → URL → skip).
-     * 4. Build final article content:
-     *    - Article body split in two halves
-     *    - Article-related image injected as Gutenberg wp:image block at the midpoint
-     *    - Ads code appended as wp:html block
-     *    - Tags section appended at the bottom with #tag chips
-     *    - SEO focus keyphrase & meta description stored as HTML comments
-     * 5. Publish draft with full Yoast + Rank Math SEO meta.
-     */
     suspend fun publishPost(
         site: WordPressSite,
         article: Article,
@@ -125,7 +125,6 @@ class WordPressApiClient {
             val siteUrl = site.siteUrl.trimEnd('/')
             val auth    = buildAuthHeader(site)
 
-            // Step 1 — Resolve category (validate or create)
             val effectiveCategory = article.category.ifBlank {
                 NewsCategory.detectCategory(article.title, article.summary)
             }
@@ -153,10 +152,8 @@ class WordPressApiClient {
                 categoryIds = resolveCategoryIds(siteUrl, auth, chain)
             }
 
-            // Step 2 — Resolve / create tag IDs
             val tagIds = resolveTagIds(siteUrl, auth, article.tags)
 
-            // Step 3 — Upload featured image
             val featuredMediaId = when {
                 article.imagePath.isNotBlank() && File(article.imagePath).exists() ->
                     uploadFeaturedImage(siteUrl, auth, article.imagePath, article.title)
@@ -165,7 +162,6 @@ class WordPressApiClient {
                 else -> 0L
             }
 
-            // Step 4 — Build full article content with image in mid + tags + ads + SEO
             val finalContent = buildArticleContent(
                 content          = article.content,
                 adsCode          = adsCode,
@@ -176,7 +172,6 @@ class WordPressApiClient {
                 metaDescription  = article.metaDescription
             )
 
-            // Step 5 — Build and send post
             val postBody = JsonObject().apply {
                 addProperty("title",   article.title)
                 addProperty("content", finalContent)
@@ -234,22 +229,6 @@ class WordPressApiClient {
         }
     }
 
-    // ─── Build article content ────────────────────────────────────────────────
-
-    /**
-     * Builds the final WordPress post HTML content:
-     *
-     * Structure:
-     *   [First half of article paragraphs]
-     *   [Article-related image as Gutenberg wp:image block — center aligned]
-     *   [Second half of article paragraphs]
-     *   [Ads code as wp:html block]
-     *   [Tags section with #tag chips]
-     *   [SEO meta comments (hidden, used by Yoast/RankMath)]
-     *
-     * Supports both HTML (<p>...</p>) and plain text (double-newline separated)
-     * input content from Gemini.
-     */
     private fun buildArticleContent(
         content: String,
         adsCode: String,
@@ -261,17 +240,12 @@ class WordPressApiClient {
     ): String {
         val sb = StringBuilder()
 
-        // ── Split content into paragraph blocks ──
         val paragraphs: List<String> = if (content.contains("</p>", ignoreCase = true)) {
-            // HTML content from Gemini: split on closing </p> tag
             content.split(Regex("(?<=</p>)", RegexOption.IGNORE_CASE))
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
+                .map { it.trim() }.filter { it.isNotBlank() }
         } else {
-            // Plain text: split on double newlines and wrap in <p>
             content.split(Regex("\\n\\n+"))
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
+                .map { it.trim() }.filter { it.isNotBlank() }
                 .map { para ->
                     if (para.startsWith("<")) para
                     else "<!-- wp:paragraph -->\n<p>$para</p>\n<!-- /wp:paragraph -->"
@@ -279,17 +253,11 @@ class WordPressApiClient {
         }
 
         if (paragraphs.isEmpty()) {
-            // Fallback: use raw content if parsing yields nothing
             sb.append(content)
         } else {
             val midPoint = (paragraphs.size / 2).coerceAtLeast(1)
+            paragraphs.take(midPoint).forEach { p -> sb.append(p).append("\n\n") }
 
-            // ── First half of article body ──
-            paragraphs.take(midPoint).forEach { p ->
-                sb.append(p).append("\n\n")
-            }
-
-            // ── Article-related image injected in the middle ──
             if (imageUrl.isNotBlank()) {
                 sb.append("""
 <!-- wp:image {"align":"center","sizeSlug":"large","linkDestination":"none","className":"nexuzy-article-mid-image"} -->
@@ -302,24 +270,17 @@ class WordPressApiClient {
                 sb.append("\n\n")
             }
 
-            // ── Second half of article body ──
-            paragraphs.drop(midPoint).forEach { p ->
-                sb.append(p).append("\n\n")
-            }
+            paragraphs.drop(midPoint).forEach { p -> sb.append(p).append("\n\n") }
         }
 
-        // ── Ads code (after article body, before tags) ──
         if (adsCode.isNotBlank()) {
             sb.append("\n<!-- wp:html -->\n")
             sb.append(adsCode)
             sb.append("\n<!-- /wp:html -->\n\n")
         }
 
-        // ── Tags section at the bottom of the article ──
         if (tags.isNotBlank()) {
-            val tagList = tags.split(",")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
+            val tagList = tags.split(",").map { it.trim() }.filter { it.isNotBlank() }
             if (tagList.isNotEmpty()) {
                 val tagChips = tagList.joinToString(" &nbsp;·&nbsp; ") { tag ->
                     "<span class=\"nexuzy-tag-chip\">#$tag</span>"
@@ -331,7 +292,6 @@ class WordPressApiClient {
             }
         }
 
-        // ── Hidden SEO meta comments (used by Yoast / Rank Math via post content parsing) ──
         if (metaDescription.isNotBlank()) {
             sb.append("\n<!-- nexuzy:meta-desc:${metaDescription.take(160).replace("--", "-")} -->")
         }
@@ -361,7 +321,7 @@ class WordPressApiClient {
                     val obj = arr[i].asJsonObject
                     all.add(WpCategory(
                         id   = obj.get("id")?.asLong ?: 0,
-                        name = obj.get("name")?.asString ?: "",
+                        name = obj.get("name")?.asString ?: "",  // FIX: plain string not object
                         slug = obj.get("slug")?.asString ?: ""
                     ))
                 }
@@ -390,7 +350,6 @@ class WordPressApiClient {
                 if ((obj.get("name")?.asString ?: "").equals(name.trim(), ignoreCase = true))
                     return obj.get("id")?.asLong ?: 0
             }
-            // Not found — create
             val create = client.newCall(
                 Request.Builder()
                     .url("$siteUrl/wp-json/wp/v2/categories")
@@ -460,10 +419,6 @@ class WordPressApiClient {
         } catch (e: Exception) { 0 }
     }
 
-    /**
-     * Download an image from a URL and upload it to WordPress media library.
-     * Used when local file is not available but imageUrl is set.
-     */
     private fun uploadFeaturedImageFromUrl(siteUrl: String, auth: String, imageUrl: String, title: String): Long {
         return try {
             Log.d("WPClient", "Uploading image from URL: $imageUrl")
@@ -478,7 +433,6 @@ class WordPressApiClient {
                 else                      -> "jpg"
             }
             val fileName = "nexuzy_${System.currentTimeMillis()}.$ext"
-
             val rb = MultipartBody.Builder().setType(MultipartBody.FORM)
                 .addFormDataPart(
                     "file", fileName,
@@ -487,7 +441,6 @@ class WordPressApiClient {
                 .addFormDataPart("title", title)
                 .addFormDataPart("alt_text", title)
                 .build()
-
             val resp = client.newCall(
                 Request.Builder()
                     .url("$siteUrl/wp-json/wp/v2/media")

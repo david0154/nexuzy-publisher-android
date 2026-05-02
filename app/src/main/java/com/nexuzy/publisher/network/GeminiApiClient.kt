@@ -16,6 +16,12 @@ import java.util.concurrent.TimeUnit
  * Gemini API client.
  * Role 1: Write news articles from RSS item facts.
  * Role 2: Generate SEO data (tags, keywords, focus keyphrase, meta description).
+ *
+ * KEY ROTATION FIX:
+ * - Each outer key-loop iteration reads a fresh key from keyManager via index offset
+ *   so rotateGeminiKey() actually takes effect within the same call.
+ * - Empty / safety-blocked responses are treated as a soft retryable failure so
+ *   we try the next model before giving up — they are NOT hard errors.
  */
 class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -79,9 +85,14 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         var lastError = ""
         var maxRetryAfter = 0
 
-        for ((keyIndex, key) in keys.withIndex()) {
+        for (keyIndex in keys.indices) {
+            // ── Always re-read keys so rotation applied by rotateGeminiKey() is visible ──
+            val currentKeys = keyManager.getGeminiKeys()
+            if (keyIndex >= currentKeys.size) break
+            val key = currentKeys[keyIndex]
+
             for (modelName in modelsToTry) {
-                Log.d("GeminiClient", "Trying key ${keyIndex + 1}/${keys.size}, model=$modelName")
+                Log.d("GeminiClient", "Trying key ${keyIndex + 1}/${currentKeys.size}, model=$modelName")
                 val result = callGemini(key, modelName, prompt)
 
                 if (result.success) {
@@ -94,13 +105,21 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                     if (retryAfter > maxRetryAfter) maxRetryAfter = retryAfter
                     Log.w("GeminiClient", "Key ${keyIndex + 1} / $modelName quota exceeded, trying next model")
                     lastError = result.error
+                    continue // try next model with same key
+                }
+
+                // Empty/safety-blocked response → treat as soft fail, try next model
+                if (result.content.isBlank() && result.error.contains("Empty response", ignoreCase = true)) {
+                    Log.w("GeminiClient", "Key ${keyIndex + 1} / $modelName returned empty (safety/block), trying next model")
+                    lastError = result.error
                     continue
                 }
 
+                // Any other non-quota hard error → rethrow immediately
                 Log.e("GeminiClient", "Non-quota error on key ${keyIndex + 1} / $modelName: ${result.error}")
                 return@withContext result.copy(keyUsed = keyIndex + 1, modelUsed = modelName)
             }
-            Log.w("GeminiClient", "Key ${keyIndex + 1}: all ${modelsToTry.size} models quota exceeded, trying next key")
+            Log.w("GeminiClient", "Key ${keyIndex + 1}: all ${modelsToTry.size} models failed, rotating to next key")
             keyManager.rotateGeminiKey()
         }
 
@@ -132,13 +151,20 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         val prompt = buildSeoPrompt(title, articleContent, category)
         val modelsToTry = if (model == DEFAULT_MODEL) MODEL_CHAIN else listOf(model)
 
-        for ((keyIndex, key) in keys.withIndex()) {
+        for (keyIndex in keys.indices) {
+            val currentKeys = keyManager.getGeminiKeys()
+            if (keyIndex >= currentKeys.size) break
+            val key = currentKeys[keyIndex]
+
             for (modelName in modelsToTry) {
                 val result = callGemini(key, modelName, prompt)
                 if (result.success) return@withContext parseSeoResponse(result.content)
                 if (isQuotaError(result.error)) {
                     Log.w("GeminiClient", "SEO: Key ${keyIndex + 1}/$modelName quota exceeded, trying next")
                     continue
+                }
+                if (result.content.isBlank() && result.error.contains("Empty response", ignoreCase = true)) {
+                    continue // safety block — try next model
                 }
                 return@withContext SeoData(false, error = result.error)
             }

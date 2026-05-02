@@ -60,6 +60,13 @@ class ApiKeyManager(context: Context) {
     fun getReplitKey(index: Int): String = prefs.getString("replit_key_$index", "") ?: ""
     fun getReplitKeys(): List<String> = (1..3).map { getReplitKey(it) }.filter { it.isNotBlank() }
 
+    // ── Google Custom Search ──────────────────────────────────────────────────
+    fun setGoogleSearchApiKey(key: String) = prefs.edit { putString("google_search_api_key", key) }
+    fun getGoogleSearchApiKey(): String = prefs.getString("google_search_api_key", "") ?: ""
+
+    fun setGoogleSearchCseId(id: String) = prefs.edit { putString("google_search_cse_id", id) }
+    fun getGoogleSearchCseId(): String = prefs.getString("google_search_cse_id", "") ?: ""
+
     // ── Other services ────────────────────────────────────────────────────────
     fun setMapsApiKey(key: String) = prefs.edit { putString("maps_api_key", key) }
     fun getMapsApiKey(): String = prefs.getString("maps_api_key", "") ?: ""
@@ -109,7 +116,6 @@ class ApiKeyManager(context: Context) {
         val current = getCurrentGeminiIndex()
         val next    = (current + 1) % keys.size
         prefs.edit { putInt("gemini_current_index", next) }
-        // If we wrapped back to 0, all keys were exhausted this round
         return if (next == 0) null else keys[next]
     }
 
@@ -131,9 +137,6 @@ class ApiKeyManager(context: Context) {
      * Automatically tries every saved Gemini key in order.
      * If a key returns a 429/quota error it silently rotates to the next key.
      * Throws only when ALL keys are exhausted.
-     *
-     * Example:
-     *   val text = keyManager.withGeminiKeyRotation { key -> callGeminiApi(key, prompt) }
      */
     suspend fun <T> withGeminiKeyRotation(block: suspend (key: String) -> T): T {
         val keys = getGeminiKeys()
@@ -152,9 +155,9 @@ class ApiKeyManager(context: Context) {
                     val nextIdx = (getCurrentGeminiIndex() + i + 1) % keys.size
                     prefs.edit { putInt("gemini_current_index", nextIdx) }
                     lastException = e
-                    continue // try next key
+                    continue
                 }
-                throw e // non-quota error — rethrow immediately
+                throw e
             }
         }
         throw lastException
@@ -163,9 +166,6 @@ class ApiKeyManager(context: Context) {
 
     /**
      * Same auto-rotation for OpenAI keys.
-     *
-     * Example:
-     *   val result = keyManager.withOpenAiKeyRotation { key -> callOpenAiApi(key, prompt) }
      */
     suspend fun <T> withOpenAiKeyRotation(block: suspend (key: String) -> T): T {
         val keys = getOpenAiKeys()
