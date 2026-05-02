@@ -11,22 +11,24 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
  * SarvamChatClient — David AI in-app assistant.
  *
- * Powers the chat screen in DavidAiChatActivity.
- * Uses Sarvam's sarvam-m model via /v1/chat/completions endpoint.
+ * Powers the chat screen. Uses Sarvam's sarvam-m model.
  *
- * FEATURES:
- *  - Weather queries    → real weather data from open-meteo.com (no API key needed)
- *  - Internet questions → DuckDuckGo Instant Answer API (no API key needed)
- *  - All other queries  → Sarvam AI with strict no-preamble prompt
+ * ROUTING:
+ *  1. Weather queries    → open-meteo.com (no API key, always fresh)
+ *  2. Internet questions → DuckDuckGo Instant Answer API (no API key)
+ *  3. Everything else    → Sarvam AI with live date+time injected in system prompt
  *
- * This is a SEPARATE client from SarvamApiClient:
- *   - SarvamApiClient  → grammar correction for articles (uses user's key)
- *   - SarvamChatClient → David AI in-app chat (uses developer pre-embedded key)
+ * DATE/TIME: Every request to Sarvam includes the current date and time
+ * (IST) in the system prompt so the AI always knows "today's date".
  */
 object SarvamChatClient {
 
@@ -49,21 +51,25 @@ object SarvamChatClient {
     )
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Live date/time helper (IST)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun currentDateTimeIST(): String {
+        val sdf = SimpleDateFormat("EEEE, dd MMMM yyyy, hh:mm a", Locale.ENGLISH)
+        sdf.timeZone = TimeZone.getTimeZone("Asia/Kolkata")
+        return sdf.format(Date())
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Main entry point
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Send conversation history to David AI and get a direct reply.
-     * Automatically routes weather / internet queries before hitting Sarvam.
-     *
-     * @param history List of (role, content) pairs. role = "user" or "assistant".
-     */
     suspend fun chat(history: List<Pair<String, String>>): ChatResult =
         withContext(Dispatchers.IO) {
 
             val userMessage = history.lastOrNull { it.first == "user" }?.second?.trim() ?: ""
 
-            // 1) Weather query → open-meteo (no API key, always fresh)
+            // 1) Weather query → open-meteo (always fresh, no API key)
             if (isWeatherQuery(userMessage)) {
                 val city = extractCity(userMessage)
                 return@withContext fetchWeather(city)
@@ -121,8 +127,6 @@ object SarvamChatClient {
     }
 
     private fun extractCity(msg: String): String {
-        val lower = msg.lowercase()
-        // Common patterns: "weather in X", "weather of X", "X weather", "X temperature"
         val inOf = Regex("weather\\s+(?:in|of|at|for)\\s+([a-z\\s]+)", RegexOption.IGNORE_CASE)
             .find(msg)?.groupValues?.get(1)?.trim()
         if (!inOf.isNullOrBlank()) return inOf
@@ -131,12 +135,11 @@ object SarvamChatClient {
             .find(msg)?.groupValues?.get(1)?.trim()
         if (!before.isNullOrBlank() && before.length > 2) return before
 
-        return "Kolkata"  // default to app's home city
+        return "Kolkata"
     }
 
     private fun fetchWeather(city: String): ChatResult {
         return try {
-            // Step A: geocode the city name
             val geoUrl = "https://geocoding-api.open-meteo.com/v1/search?name=${URLEncoder.encode(city, "UTF-8")}&count=1&language=en&format=json"
             val geoResp = http.newCall(Request.Builder().url(geoUrl).build()).execute()
             val geoBody = geoResp.body?.string() ?: return ChatResult(false, error = "Could not geocode city: $city")
@@ -151,7 +154,6 @@ object SarvamChatClient {
             val cityName = loc.optString("name", city)
             val country  = loc.optString("country", "")
 
-            // Step B: fetch current weather
             val wxUrl = "https://api.open-meteo.com/v1/forecast" +
                 "?latitude=$lat&longitude=$lon" +
                 "&current=temperature_2m,relative_humidity_2m,apparent_temperature," +
@@ -166,13 +168,13 @@ object SarvamChatClient {
             val cur    = wx.getAsJsonObject("current")
             val daily  = wx.getAsJsonObject("daily")
 
-            val tempC       = cur.get("temperature_2m").asDouble
-            val feelsC      = cur.get("apparent_temperature").asDouble
-            val humidity    = cur.get("relative_humidity_2m").asInt
-            val wind        = cur.get("wind_speed_10m").asDouble
-            val rain        = cur.get("precipitation").asDouble
-            val wCode       = cur.get("weather_code").asInt
-            val condition   = weatherCodeToText(wCode)
+            val tempC     = cur.get("temperature_2m").asDouble
+            val feelsC    = cur.get("apparent_temperature").asDouble
+            val humidity  = cur.get("relative_humidity_2m").asInt
+            val wind      = cur.get("wind_speed_10m").asDouble
+            val rain      = cur.get("precipitation").asDouble
+            val wCode     = cur.get("weather_code").asInt
+            val condition = weatherCodeToText(wCode)
 
             val maxTemps = daily.getAsJsonArray("temperature_2m_max")
             val minTemps = daily.getAsJsonArray("temperature_2m_min")
@@ -180,7 +182,7 @@ object SarvamChatClient {
             val days     = daily.getAsJsonArray("time")
 
             val reply = buildString {
-                appendLine("\uD83C\uDF24\uFE0F **Weather in $cityName${if (country.isNotBlank()) ", $country" else ""}**")
+                appendLine("🌤️ **Weather in $cityName${if (country.isNotBlank()) ", $country" else ""}**")
                 appendLine()
                 appendLine("**Now:** $condition")
                 appendLine("**Temperature:** ${tempC}°C (feels like ${feelsC}°C)")
@@ -188,13 +190,13 @@ object SarvamChatClient {
                 appendLine("**Wind:** ${wind} km/h")
                 if (rain > 0) appendLine("**Rain:** ${rain} mm")
                 appendLine()
-                appendLine("\uD83D\uDCC5 **3-Day Forecast:**")
+                appendLine("📅 **3-Day Forecast:**")
                 for (i in 0 until minOf(3, days.size())) {
                     val day   = days[i].asString
                     val hi    = maxTemps[i].asDouble
                     val lo    = minTemps[i].asDouble
                     val rain3 = rainDays[i].asDouble
-                    val sym   = if (rain3 > 1.0) "\uD83C\uDF27\uFE0F" else "\u2600\uFE0F"
+                    val sym   = if (rain3 > 1.0) "🌧️" else "☀️"
                     appendLine("$sym **$day** — ${hi}°C / ${lo}°C${if (rain3 > 0) ", rain ${rain3}mm" else ""}")
                 }
                 appendLine()
@@ -209,15 +211,15 @@ object SarvamChatClient {
     }
 
     private fun weatherCodeToText(code: Int): String = when (code) {
-        0            -> "Clear sky \u2600\uFE0F"
-        1, 2, 3      -> "Partly cloudy \u26C5"
-        45, 48       -> "Foggy \uD83C\uDF2B\uFE0F"
-        51, 53, 55   -> "Drizzle \uD83C\uDF26\uFE0F"
-        61, 63, 65   -> "Rain \uD83C\uDF27\uFE0F"
-        71, 73, 75   -> "Snow \u2744\uFE0F"
-        80, 81, 82   -> "Rain showers \uD83C\uDF26\uFE0F"
-        95           -> "Thunderstorm \u26C8\uFE0F"
-        96, 99       -> "Thunderstorm with hail \u26C8\uFE0F"
+        0            -> "Clear sky ☀️"
+        1, 2, 3      -> "Partly cloudy ⛅"
+        45, 48       -> "Foggy 🌫️"
+        51, 53, 55   -> "Drizzle 🌦️"
+        61, 63, 65   -> "Rain 🌧️"
+        71, 73, 75   -> "Snow ❄️"
+        80, 81, 82   -> "Rain showers 🌦️"
+        95           -> "Thunderstorm ⛈️"
+        96, 99       -> "Thunderstorm with hail ⛈️"
         else         -> "Unknown ($code)"
     }
 
@@ -225,40 +227,27 @@ object SarvamChatClient {
         if (has(key) && !get(key).isJsonNull) get(key).asString else default
 
     // ─────────────────────────────────────────────────────────────────────────
-    // DuckDuckGo Instant Answer (internet search)
+    // DuckDuckGo Instant Answer
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Broad trigger list — catches news, events, prices, sports results,
-     * people, companies, and any factual/current-events questions.
-     * When DDG has no result it silently falls through to Sarvam.
-     */
     private val SEARCH_TRIGGERS = listOf(
-        // explicit search intent
         "search", "look up", "find", "google",
-        // factual questions that need fresh data
         "what is", "what are", "what was", "what were",
         "who is", "who are", "who was", "who were",
         "when is", "when was", "when did", "when will",
         "where is", "where are", "where was",
         "how much", "how many", "how does",
         "why is", "why did", "why are",
-        // current/live info
         "latest", "newest", "recent", "current", "now",
         "today", "yesterday", "this week", "this month", "this year",
         "right now", "live", "breaking", "just announced",
-        // sports & events
         "score", "winner", "won", "champion", "ipl", "match", "tournament",
         "election", "result", "results",
-        // finance & prices
         "price", "stock", "share price", "rate", "exchange rate", "crypto",
         "bitcoin", "ethereum",
-        // news domains
         "news", "update", "announcement", "launched", "released",
-        // people & organisations
         "ceo", "founder", "president", "prime minister", "minister",
         "company", "startup",
-        // tech
         "version", "release", "update of", "new feature"
     )
 
@@ -295,18 +284,23 @@ object SarvamChatClient {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Sarvam chat body builder
+    // Sarvam chat body builder — injects live date/time in system prompt
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun buildChatBody(history: List<Pair<String, String>>): String {
         val messages = JsonArray()
+        val liveDateTime = currentDateTimeIST()
 
-        // Strict system prompt — no preamble, no meta commentary, no cutoff disclaimers
         val systemMsg = JsonObject().apply {
             addProperty("role", "system")
             addProperty("content", """
                 You are David AI, an intelligent assistant built by David, powered by Nexuzy Lab.
                 You specialise in news article writing, SEO, WordPress publishing, and research.
+
+                CURRENT DATE AND TIME: $liveDateTime (IST)
+                Use this date whenever the user asks what today's date or time is.
+                Do NOT say your knowledge has a cutoff. Do NOT mention training data limits.
+                If asked about today's date or time, use the date above — it is always accurate.
 
                 STRICT RULES — follow every time, no exceptions:
                 1. NEVER start your reply with phrases like:
@@ -318,8 +312,8 @@ object SarvamChatClient {
                 5. Be concise. If the answer fits in one sentence, use one sentence.
                 6. Use markdown (bold, bullet points) only when it genuinely helps clarity.
                 7. NEVER say "my knowledge cutoff is...", "as of my last update...",
-                   "I don't have information beyond...", or any similar phrase about
-                   training data limits. If you don't know something recent, just say
+                   "I don't have information beyond...", or any similar phrase.
+                   If you don't know something recent, just say
                    "I don't have that information right now" — nothing more.
             """.trimIndent())
         }

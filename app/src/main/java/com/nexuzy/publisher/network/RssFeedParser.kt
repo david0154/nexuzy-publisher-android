@@ -2,6 +2,9 @@ package com.nexuzy.publisher.network
 
 import android.util.Log
 import com.nexuzy.publisher.data.model.RssItem
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
@@ -13,31 +16,29 @@ import java.net.URI
 import java.util.concurrent.TimeUnit
 
 /**
- * RSS Feed Parser with full article enrichment.
+ * RSS Feed Parser — batch-fetch optimised.
  *
- * Two-phase fetch:
+ * BATCH STRATEGY:
+ *   - fetchAllFeeds() accepts any number of feed URLs.
+ *   - Feeds are processed in BATCHES of BATCH_SIZE (20) concurrently.
+ *   - Hard cap: only the first MAX_FEEDS (100) feed URLs are ever used.
+ *   - Each batch is launched in parallel with coroutineScope + async.
+ *   - Within each feed, up to MAX_ENRICH_ITEMS (20) articles are enriched.
  *
- * PHASE 1 — XML parsing:
- *   Extracts title, description, link, pubDate, imageUrl from the RSS XML.
- *   Image is taken from <enclosure>, <media:content>, <media:thumbnail>, or HTML in <content:encoded>.
+ * TWO-PHASE PER FEED:
+ *   Phase 1 — XML: title, description, link, pubDate, imageUrl from RSS XML.
+ *   Phase 2 — Enrich: fetch article page for og:image + full body text.
  *
- * PHASE 2 — Article enrichment:
- *   For each item, fetches the article URL (item.link) ONCE and extracts:
- *     a) og:image / twitter:image / first <img> → fills imageUrl if still empty
- *     b) Full article body text                 → fills fullContent (used by Gemini)
- *
- *   Budget: up to MAX_ENRICH_ITEMS per feed fetch to limit total network time.
- *
- * IMAGE SKIP POLICY:
- *   After both phases, any article that STILL has no image URL is DROPPED.
- *   This ensures only visually rich articles are shown in the app.
+ * IMAGE SKIP: articles with no image after both phases are dropped.
  */
 class RssFeedParser {
 
     companion object {
-        private const val MAX_ENRICH_ITEMS = 20
+        private const val BATCH_SIZE       = 20   // feeds fetched concurrently per batch
+        private const val MAX_FEEDS        = 100  // hard cap on total RSS URLs processed
+        private const val MAX_ENRICH_ITEMS = 20   // max articles enriched per feed
         private const val MAX_CONTENT_CHARS = 4000
-        private const val TAG = "RssParser"
+        private const val TAG              = "RssParser"
     }
 
     private val client = OkHttpClient.Builder()
@@ -46,15 +47,51 @@ class RssFeedParser {
         .followRedirects(true)
         .build()
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // PUBLIC: batch-fetch many feeds
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
-     * Fetch and parse an RSS feed URL.
-     * Returns enriched RssItems that have a non-blank imageUrl.
-     * Articles without any image are automatically filtered out.
+     * Fetch multiple RSS feeds in parallel batches of [BATCH_SIZE].
+     * Maximum [MAX_FEEDS] URLs are processed (extras ignored).
      *
-     * @param feedUrl      URL of the RSS/Atom feed.
-     * @param feedName     Human-readable feed name (stored in RssItem).
-     * @param feedCategory Category label (stored in RssItem).
-     * @param enrichItems  If true (default), fetch each article page for image + full content.
+     * @param feeds List of Triple(feedUrl, feedName, feedCategory)
+     * @param enrichItems Whether to enrich each article (fetch page for image/content)
+     * @return Combined, deduplicated list of RssItems sorted newest-first
+     */
+    suspend fun fetchAllFeeds(
+        feeds: List<Triple<String, String, String>>,
+        enrichItems: Boolean = true
+    ): List<RssItem> = coroutineScope {
+
+        val capped = feeds.take(MAX_FEEDS)
+        val allItems = mutableListOf<RssItem>()
+
+        // Process in batches of BATCH_SIZE
+        capped.chunked(BATCH_SIZE).forEachIndexed { batchIdx, batch ->
+            Log.d(TAG, "Batch ${batchIdx + 1}: fetching ${batch.size} feeds concurrently")
+            val batchResults = batch.map { (url, name, category) ->
+                async {
+                    fetchFeed(url, name, category, enrichItems)
+                }
+            }.awaitAll()
+            batchResults.forEach { allItems.addAll(it) }
+            Log.d(TAG, "Batch ${batchIdx + 1} done. Total so far: ${allItems.size}")
+        }
+
+        // Deduplicate by link, sort newest first (pubDate desc, then insertion order)
+        allItems
+            .distinctBy { it.link }
+            .sortedByDescending { it.pubDate }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PUBLIC: single feed fetch
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Fetch and parse a single RSS feed URL.
+     * Returns enriched RssItems that have a non-blank imageUrl.
      */
     suspend fun fetchFeed(
         feedUrl: String,
@@ -72,9 +109,8 @@ class RssFeedParser {
                 val xml = response.body?.string() ?: return emptyList()
                 val items = parseRssXml(xml, feedName, feedCategory)
                 val enriched = if (enrichItems) enrichItems(items) else items
-                // ── IMAGE SKIP: drop any article that has no image after enrichment ──
                 val withImage = enriched.filter { it.imageUrl.isNotBlank() }
-                Log.d(TAG, "Feed $feedName: ${items.size} parsed, ${enriched.size} enriched, ${withImage.size} with image")
+                Log.d(TAG, "$feedName: ${items.size} parsed → ${withImage.size} with image")
                 withImage
             } else {
                 Log.w(TAG, "HTTP ${response.code} for $feedUrl")
@@ -225,28 +261,17 @@ class RssFeedParser {
 
     private fun extractArticleBody(doc: Document): String {
         val selectors = listOf(
-            "article",
-            ".entry-content",
-            ".post-content",
-            ".article-body",
-            ".story-body",
-            ".article__body",
-            ".td-post-content",
-            ".single-post-content",
-            ".content-body",
-            "[itemprop=articleBody]",
-            ".article-text",
-            "#article-body",
-            "main"
+            "article", ".entry-content", ".post-content", ".article-body",
+            ".story-body", ".article__body", ".td-post-content",
+            ".single-post-content", ".content-body", "[itemprop=articleBody]",
+            ".article-text", "#article-body", "main"
         )
-
         for (selector in selectors) {
             val el = doc.selectFirst(selector) ?: continue
             el.select("nav, aside, .related, .comments, script, style, .advertisement, .ad, .social-share").remove()
             val text = el.text().trim()
             if (text.length > 200) return text.take(MAX_CONTENT_CHARS)
         }
-
         doc.select("nav, header, footer, aside, script, style").remove()
         return doc.body()?.text()?.trim()?.take(MAX_CONTENT_CHARS) ?: ""
     }
