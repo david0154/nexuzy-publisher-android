@@ -228,10 +228,38 @@ object SarvamChatClient {
     // DuckDuckGo Instant Answer (internet search)
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Broad trigger list — catches news, events, prices, sports results,
+     * people, companies, and any factual/current-events questions.
+     * When DDG has no result it silently falls through to Sarvam.
+     */
     private val SEARCH_TRIGGERS = listOf(
-        "search", "look up", "find", "what is", "who is", "who are",
-        "tell me about", "latest news", "current", "today", "right now",
-        "price of", "stock", "live", "breaking"
+        // explicit search intent
+        "search", "look up", "find", "google",
+        // factual questions that need fresh data
+        "what is", "what are", "what was", "what were",
+        "who is", "who are", "who was", "who were",
+        "when is", "when was", "when did", "when will",
+        "where is", "where are", "where was",
+        "how much", "how many", "how does",
+        "why is", "why did", "why are",
+        // current/live info
+        "latest", "newest", "recent", "current", "now",
+        "today", "yesterday", "this week", "this month", "this year",
+        "right now", "live", "breaking", "just announced",
+        // sports & events
+        "score", "winner", "won", "champion", "ipl", "match", "tournament",
+        "election", "result", "results",
+        // finance & prices
+        "price", "stock", "share price", "rate", "exchange rate", "crypto",
+        "bitcoin", "ethereum",
+        // news domains
+        "news", "update", "announcement", "launched", "released",
+        // people & organisations
+        "ceo", "founder", "president", "prime minister", "minister",
+        "company", "startup",
+        // tech
+        "version", "release", "update of", "new feature"
     )
 
     private fun isSearchQuery(msg: String): Boolean {
@@ -273,7 +301,7 @@ object SarvamChatClient {
     private fun buildChatBody(history: List<Pair<String, String>>): String {
         val messages = JsonArray()
 
-        // Strict system prompt — no preamble, no meta commentary
+        // Strict system prompt — no preamble, no meta commentary, no cutoff disclaimers
         val systemMsg = JsonObject().apply {
             addProperty("role", "system")
             addProperty("content", """
@@ -289,6 +317,10 @@ object SarvamChatClient {
                 4. Answer DIRECTLY. First word of your reply must be useful content.
                 5. Be concise. If the answer fits in one sentence, use one sentence.
                 6. Use markdown (bold, bullet points) only when it genuinely helps clarity.
+                7. NEVER say "my knowledge cutoff is...", "as of my last update...",
+                   "I don't have information beyond...", or any similar phrase about
+                   training data limits. If you don't know something recent, just say
+                   "I don't have that information right now" — nothing more.
             """.trimIndent())
         }
         messages.add(systemMsg)
