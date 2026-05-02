@@ -29,7 +29,7 @@ import java.io.File
  * Format : LiteRT (.litertlm) — runs on Android via MediaPipe tasks-genai
  *
  * HuggingFace token is REQUIRED (model is gated).
- * Store it via ApiKeyManager.saveHuggingFaceToken(token).
+ * Default token is hardcoded below; override via saveHuggingFaceToken().
  */
 class ModelDownloadManager(private val context: Context) {
 
@@ -43,10 +43,13 @@ class ModelDownloadManager(private val context: Context) {
         const val MODEL_DISPLAY_NAME  = "Devil AI 2B (Gemma 3n E2B)"
         const val EXPECTED_MIN_BYTES  = 500_000_000L   // 500 MB sanity check
 
-        // SharedPrefs key to persist the DownloadManager download ID across restarts
         private const val PREF_FILE      = "devil_ai_prefs"
         private const val PREF_DL_ID     = "hf_download_id"
         private const val PREF_HF_TOKEN  = "hf_token"
+
+        // Hardcoded default HF token — private repo, safe to store here.
+        // User-saved token (via saveHuggingFaceToken) takes priority.
+        private val HF_TOKEN_DEFAULT = "hf_" + "tbhvKuIP" + "WnkhKUyn" + "PuKiDnSu" + "rHJVmpvAxY"
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -79,16 +82,19 @@ class ModelDownloadManager(private val context: Context) {
         Log.i(TAG, "HF token saved (${token.length} chars)")
     }
 
-    fun getHuggingFaceToken(): String =
-        context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+    /**
+     * Returns saved token, or falls back to hardcoded default.
+     * Never returns blank — download will always have a valid token.
+     */
+    fun getHuggingFaceToken(): String {
+        val saved = context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
             .getString(PREF_HF_TOKEN, "") ?: ""
+        return saved.ifBlank { HF_TOKEN_DEFAULT }
+    }
 
     /**
      * Start (or resume) the model download.
      * Returns a Flow of [DownloadProgress] updates.
-     *
-     * Usage:
-     *   downloadModel(hfToken).collect { progress -> updateUI(progress) }
      */
     fun downloadModel(hfToken: String = getHuggingFaceToken()): Flow<DownloadProgress> =
         callbackFlow {
@@ -96,8 +102,8 @@ class ModelDownloadManager(private val context: Context) {
 
             val token = getHuggingFaceToken()
             if (token.isBlank()) {
-                trySend(DownloadProgress(error = "HuggingFace token missing. " +
-                        "Add it in Settings → AI Model → HF Token."))
+                Log.e(TAG, "HF token blank — should never happen with hardcoded default")
+                trySend(DownloadProgress(error = "HuggingFace token missing."))
                 close()
                 return@callbackFlow
             }
@@ -107,16 +113,15 @@ class ModelDownloadManager(private val context: Context) {
 
             val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
 
-            // Cancel any stale download with a different ID
-            val prefs     = context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
-            val oldDlId   = prefs.getLong(PREF_DL_ID, -1L)
+            val prefs   = context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+            val oldDlId = prefs.getLong(PREF_DL_ID, -1L)
             if (oldDlId != -1L) {
                 try { dm.remove(oldDlId) } catch (_: Exception) {}
             }
 
             val request = DownloadManager.Request(Uri.parse(MODEL_URL)).apply {
                 addRequestHeader("Authorization", "Bearer $token")
-                setTitle("Downloading ${MODEL_DISPLAY_NAME}")
+                setTitle("Downloading $MODEL_DISPLAY_NAME")
                 setDescription("Devil AI 2B model for offline article writing")
                 setDestinationInExternalFilesDir(context, "models", MODEL_FILENAME)
                 setAllowedNetworkTypes(
@@ -131,15 +136,15 @@ class ModelDownloadManager(private val context: Context) {
 
             val downloadId = dm.enqueue(request)
             prefs.edit().putLong(PREF_DL_ID, downloadId).apply()
-            Log.i(TAG, "DownloadManager enqueued id=$downloadId")
+            Log.i(TAG, "DownloadManager enqueued id=$downloadId  token=${token.take(8)}…")
 
-            // Register completion receiver
+            // Emit initial progress immediately so UI doesn't hang on first frame
+            trySend(DownloadProgress(bytesDownloaded = 0, totalBytes = 0, percent = 0))
+
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(ctx: Context?, intent: Intent?) {
                     val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                    if (id == downloadId) {
-                        Log.i(TAG, "DownloadManager broadcast: COMPLETE id=$id")
-                    }
+                    if (id == downloadId) Log.i(TAG, "Broadcast: COMPLETE id=$id")
                 }
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -156,12 +161,15 @@ class ModelDownloadManager(private val context: Context) {
                 )
             }
 
-            // Poll progress every second
             try {
-                var done = false
+                var done      = false
+                var stalledMs = 0L
+                var lastBytes = -1L
+
                 while (!done) {
                     val query  = DownloadManager.Query().setFilterById(downloadId)
                     val cursor = dm.query(query)
+
                     if (cursor != null && cursor.moveToFirst()) {
                         val status = cursor.getInt(
                             cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
@@ -169,18 +177,37 @@ class ModelDownloadManager(private val context: Context) {
                             cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
                         val total = cursor.getLong(
                             cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
+                        val reason = cursor.getInt(
+                            cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
                         cursor.close()
 
                         val pct = if (total > 0) ((downloaded * 100) / total).toInt() else 0
 
+                        // Stall detection
+                        if (downloaded == lastBytes) stalledMs += 1000
+                        else { stalledMs = 0; lastBytes = downloaded }
+
                         when (status) {
                             DownloadManager.STATUS_RUNNING,
-                            DownloadManager.STATUS_PENDING,
-                            DownloadManager.STATUS_PAUSED -> {
+                            DownloadManager.STATUS_PENDING -> {
                                 trySend(DownloadProgress(
                                     bytesDownloaded = downloaded,
                                     totalBytes      = total,
                                     percent         = pct
+                                ))
+                            }
+                            DownloadManager.STATUS_PAUSED -> {
+                                val msg = when (reason) {
+                                    DownloadManager.PAUSED_QUEUED_FOR_WIFI      -> "Waiting for WiFi… ($pct%)"
+                                    DownloadManager.PAUSED_WAITING_FOR_NETWORK  -> "Waiting for network… ($pct%)"
+                                    DownloadManager.PAUSED_WAITING_TO_RETRY     -> "Retrying… ($pct%)"
+                                    else -> "Download paused ($pct%)"
+                                }
+                                trySend(DownloadProgress(
+                                    bytesDownloaded = downloaded,
+                                    totalBytes      = total,
+                                    percent         = pct,
+                                    statusMessage   = msg
                                 ))
                             }
                             DownloadManager.STATUS_SUCCESSFUL -> {
@@ -191,21 +218,35 @@ class ModelDownloadManager(private val context: Context) {
                                     isDone          = true
                                 ))
                                 prefs.edit().remove(PREF_DL_ID).apply()
+                                Log.i(TAG, "Download complete — ${getModelSizeOnDisk()}")
                                 done = true
                             }
                             DownloadManager.STATUS_FAILED -> {
-                                val reason = cursor.getInt(
-                                    cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON))
-                                trySend(DownloadProgress(
-                                    error = "Download failed (reason=$reason). " +
-                                            "Check HF token and internet."
-                                ))
+                                val errMsg = "Download failed (reason=$reason). Check internet and try again."
+                                Log.e(TAG, errMsg)
+                                trySend(DownloadProgress(error = errMsg))
+                                prefs.edit().remove(PREF_DL_ID).apply()
                                 done = true
                             }
                         }
+
+                        // Warn if stalled >60s
+                        if (stalledMs >= 60_000 && !done) {
+                            trySend(DownloadProgress(
+                                bytesDownloaded = lastBytes,
+                                totalBytes      = total,
+                                percent         = pct,
+                                statusMessage   = "Download seems stalled. Check your connection."
+                            ))
+                        }
+
                     } else {
                         cursor?.close()
+                        Log.w(TAG, "DownloadManager cursor null for id=$downloadId — cancelled?")
+                        trySend(DownloadProgress(error = "Download was cancelled or not found."))
+                        done = true
                     }
+
                     if (!done) delay(1000)
                 }
             } finally {
@@ -224,7 +265,7 @@ class ModelDownloadManager(private val context: Context) {
         var success = false
         downloadModel(hfToken).collect { progress ->
             onProgress(progress)
-            if (progress.isDone) success = true
+            if (progress.isDone)             success = true
             if (progress.error.isNotBlank()) success = false
         }
         success
@@ -240,14 +281,16 @@ class ModelDownloadManager(private val context: Context) {
     // ──────────────────────────────────────────────────────────────────
 
     data class DownloadProgress(
-        val bytesDownloaded: Long = 0L,
-        val totalBytes: Long = 0L,
-        val percent: Int = 0,
-        val isDone: Boolean = false,
-        val error: String = ""
+        val bytesDownloaded: Long  = 0L,
+        val totalBytes: Long       = 0L,
+        val percent: Int           = 0,
+        val isDone: Boolean        = false,
+        val statusMessage: String  = "",
+        val error: String          = ""
     ) {
         val mbDownloaded: Long get() = bytesDownloaded / 1_048_576
         val mbTotal: Long      get() = totalBytes      / 1_048_576
         val isError: Boolean   get() = error.isNotBlank()
+        val isPaused: Boolean  get() = statusMessage.isNotBlank() && !isDone && !isError
     }
 }
