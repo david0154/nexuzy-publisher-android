@@ -5,8 +5,6 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.widget.EditText
-import android.widget.ImageButton
 import android.widget.TextView
 import androidx.core.view.isVisible
 import androidx.fragment.app.Fragment
@@ -16,6 +14,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
 import com.nexuzy.publisher.R
+import com.nexuzy.publisher.databinding.FragmentChatBinding
 import com.nexuzy.publisher.network.SarvamChatClient
 import kotlinx.coroutines.launch
 
@@ -30,7 +29,12 @@ import kotlinx.coroutines.launch
  */
 class ChatFragment : Fragment() {
 
-    // ─── Message model ─────────────────────────────────────────────────────────
+    // ─── View Binding ──────────────────────────────────────────────────────────────────
+
+    private var _binding: FragmentChatBinding? = null
+    private val binding get() = _binding!!
+
+    // ─── Message model ─────────────────────────────────────────────────────────────
 
     data class ChatMessage(
         val id: Long = System.currentTimeMillis(),
@@ -40,7 +44,7 @@ class ChatFragment : Fragment() {
         val isTyping: Boolean = false
     )
 
-    // ─── Adapter ───────────────────────────────────────────────────────────────
+    // ─── Adapter ───────────────────────────────────────────────────────────────────
 
     inner class ChatAdapter : ListAdapter<ChatMessage, RecyclerView.ViewHolder>(
         object : DiffUtil.ItemCallback<ChatMessage>() {
@@ -96,44 +100,32 @@ class ChatFragment : Fragment() {
 
     inner class TypingVH(view: View) : RecyclerView.ViewHolder(view)
 
-    // ─── Fragment state ────────────────────────────────────────────────────────
+    // ─── Fragment state ───────────────────────────────────────────────────────────
 
     private val chatAdapter = ChatAdapter()
     private val messages    = mutableListOf<ChatMessage>()
-
-    // Conversation history sent to Sarvam AI: list of (role, content) pairs
     private val conversationHistory = mutableListOf<Pair<String, String>>()
-
     private var isWaiting = false
 
-    private lateinit var rvMessages: RecyclerView
-    private lateinit var etInput: EditText
-    private lateinit var btnSend: ImageButton
-    private lateinit var tvEmpty: TextView
-
-    // ─── Lifecycle ─────────────────────────────────────────────────────────────
+    // ─── Lifecycle ─────────────────────────────────────────────────────────────────
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View {
-        return inflater.inflate(R.layout.fragment_chat, container, false)
+        _binding = FragmentChatBinding.inflate(inflater, container, false)
+        return binding.root
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        rvMessages = view.findViewById(R.id.rvChatMessages)
-        etInput    = view.findViewById(R.id.etChatInput)
-        btnSend    = view.findViewById(R.id.btnSendMessage)
-        tvEmpty    = view.findViewById(R.id.tvChatEmpty)
-
-        rvMessages.layoutManager = LinearLayoutManager(requireContext()).apply {
+        binding.rvChatMessages.layoutManager = LinearLayoutManager(requireContext()).apply {
             stackFromEnd = true
         }
-        rvMessages.adapter = chatAdapter
+        binding.rvChatMessages.adapter = chatAdapter
 
-        // Welcome message (not added to conversationHistory — just UI)
+        // Welcome message
         addAiMessage(
             "\uD83D\uDC4B Hello! I'm your AI news assistant powered by Sarvam AI.\n\n" +
             "I can help you with:\n" +
@@ -144,9 +136,9 @@ class ChatFragment : Fragment() {
             "What can I help you with today?"
         )
 
-        btnSend.setOnClickListener { sendMessage() }
+        binding.btnSendMessage.setOnClickListener { sendMessage() }
 
-        etInput.setOnEditorActionListener { _, actionId, _ ->
+        binding.etChatInput.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_SEND) {
                 sendMessage()
                 true
@@ -156,7 +148,7 @@ class ChatFragment : Fragment() {
         setupQuickPrompts(view)
     }
 
-    // ─── Quick prompt chips ────────────────────────────────────────────────────
+    // ─── Quick prompt chips ─────────────────────────────────────────────────────
 
     private val quickPrompts = listOf(
         "\uD83D\uDCF0 How do I write a viral headline?",
@@ -182,12 +174,12 @@ class ChatFragment : Fragment() {
         }
     }
 
-    // ─── Send message ──────────────────────────────────────────────────────────
+    // ─── Send message ────────────────────────────────────────────────────────────
 
     private fun sendMessage() {
-        val text = etInput.text.toString().trim()
+        val text = binding.etChatInput.text.toString().trim()
         if (text.isBlank() || isWaiting) return
-        etInput.setText("")
+        binding.etChatInput.setText("")
         sendMessageText(text)
     }
 
@@ -195,12 +187,10 @@ class ChatFragment : Fragment() {
         if (isWaiting) return
         isWaiting = true
 
-        // Add user message to UI and to conversation history
         addUserMessage(text)
         conversationHistory.add(Pair("user", text))
-        tvEmpty.isVisible = false
+        binding.tvChatEmpty.isVisible = false
 
-        // Show typing indicator
         val typingMsg = ChatMessage(text = "", isUser = false, isTyping = true)
         messages.add(typingMsg)
         chatAdapter.submitList(messages.toList())
@@ -208,13 +198,10 @@ class ChatFragment : Fragment() {
 
         lifecycleScope.launch {
             try {
-                // SarvamChatClient is a singleton object — call chat() with full history
                 val result = SarvamChatClient.chat(conversationHistory.toList())
-
                 messages.removeAll { it.isTyping }
 
                 if (result.success) {
-                    // Add AI reply to history so follow-up messages have context
                     conversationHistory.add(Pair("assistant", result.reply))
                     addAiMessage(result.reply)
                 } else {
@@ -235,7 +222,7 @@ class ChatFragment : Fragment() {
         }
     }
 
-    // ─── Helpers ───────────────────────────────────────────────────────────────
+    // ─── Helpers ───────────────────────────────────────────────────────────────────
 
     private fun addUserMessage(text: String) {
         messages.add(ChatMessage(text = text, isUser = true))
@@ -251,10 +238,11 @@ class ChatFragment : Fragment() {
 
     private fun scrollToBottom() {
         if (messages.isNotEmpty())
-            rvMessages.smoothScrollToPosition(messages.size - 1)
+            binding.rvChatMessages.smoothScrollToPosition(messages.size - 1)
     }
 
     override fun onDestroyView() {
         super.onDestroyView()
+        _binding = null
     }
 }
