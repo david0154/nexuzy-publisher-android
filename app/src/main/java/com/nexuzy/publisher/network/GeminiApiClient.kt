@@ -40,6 +40,11 @@ import java.util.concurrent.TimeUnit
  * SEO PARSE FIX (v4):
  * - Sarvam backup SEO returns <think>...</think> block before JSON
  * - parseSeoResponse() now strips <think> blocks before JSON extraction
+ *
+ * OUTPUT SANITIZER FIX (v5):
+ * - cleanArticleOutput() strips any AI thinking-text lines that leak before the article
+ * - Removes banned filler phrases injected mid-article by the model
+ * - Applied to every article result before it leaves this class
  */
 class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -76,6 +81,74 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         val metaDescription: String = "",
         val error: String = ""
     )
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // OUTPUT SANITIZER — strips AI thinking leakage + banned phrases
+    // Applied to every article before it leaves this class.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Strip AI model thinking-text preamble and banned journalistic filler phrases
+     * from article output before it reaches the UI or database.
+     */
+    private fun cleanArticleOutput(text: String): String {
+        var clean = text.trim()
+
+        // --- 1. Strip AI thinking-text lines at the very start ---
+        // Models sometimes begin their response with internal reasoning before the article.
+        val thinkingPrefixes = listOf(
+            Regex("""^(Okay|Alright|Sure|Got it|Of course|Certainly)[,!]?\s.*?[\.\n]""", RegexOption.IGNORE_CASE),
+            Regex("""^(Let me|I'll|I will|I need to|I'm going to)\s.*?[\.\n]""", RegexOption.IGNORE_CASE),
+            Regex("""^(Here is|Here's|The following is|Below is)\s.*?[\.\n]""", RegexOption.IGNORE_CASE),
+            Regex("""^(The user|My task|As requested|As instructed)\s.*?[\.\n]""", RegexOption.IGNORE_CASE)
+        )
+        for (pattern in thinkingPrefixes) {
+            clean = pattern.replace(clean, "").trim()
+        }
+
+        // --- 2. Strip <think>...</think> reasoning blocks (Sarvam / DeepSeek style) ---
+        clean = clean.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "").trim()
+
+        // --- 3. Remove banned filler phrases that make articles sound AI-generated ---
+        // These are injected mid-sentence by the model despite the prompt forbidding them.
+        val bannedPhrases = mapOf(
+            // Openers that corrupt sentence beginnings
+            Regex("""^To be honest,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^Arguably,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^If you think about it,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^For most people,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^It's worth noting(?: that)?,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^It is worth noting(?: that)?,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^In today's rapidly evolving landscape,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^In a significant development,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^As the world watches,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^Notably,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
+            Regex("""^This underscores\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "This shows ",
+
+            // Mid-sentence filler replacements
+            Regex("""\bdelve into\b""", RegexOption.IGNORE_CASE) to "explore",
+            Regex("""\bshed light on\b""", RegexOption.IGNORE_CASE) to "explain",
+            Regex("""\bunderscore(s)?\b""", RegexOption.IGNORE_CASE) to "highlight$1",
+            Regex("""\bin an era of\b""", RegexOption.IGNORE_CASE) to "as",
+            Regex("""\bnavigate(s|d)?\b""", RegexOption.IGNORE_CASE) to "handle$1",
+            Regex("""\bpivotal\b""", RegexOption.IGNORE_CASE) to "key",
+            Regex("""\bin conclusion,?\s""", RegexOption.IGNORE_CASE) to "",
+            Regex("""\bin summary,?\s""", RegexOption.IGNORE_CASE) to "",
+            Regex("""\bonly time will tell\b""", RegexOption.IGNORE_CASE) to "",
+            Regex("""\bremains to be seen\b""", RegexOption.IGNORE_CASE) to "is unclear",
+            Regex("""\bin today's (fast-paced|digital|modern|rapidly evolving)\s+\w+\b""", RegexOption.IGNORE_CASE) to "today",
+            Regex("""\blandscape\b""", RegexOption.IGNORE_CASE) to "environment"
+        )
+        for ((pattern, replacement) in bannedPhrases) {
+            clean = pattern.replace(clean, replacement)
+        }
+
+        // --- 4. Clean up any double spaces or blank lines left by removals ---
+        clean = clean.replace(Regex("""\n{3,}"""), "\n\n")
+        clean = clean.replace(Regex("""[ \t]{2,}"""), " ")
+
+        return clean.trim()
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // ROLE 1: Write news article
@@ -122,7 +195,13 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
                 if (result.success) {
                     Log.i("GeminiClient", "Success ✔ key=${keyIndex + 1}, model=$modelName")
-                    return@withContext result.copy(keyUsed = keyIndex + 1, modelUsed = modelName)
+                    // ✅ Sanitize output before returning
+                    val cleaned = cleanArticleOutput(result.content)
+                    return@withContext result.copy(
+                        content   = cleaned,
+                        keyUsed   = keyIndex + 1,
+                        modelUsed = modelName
+                    )
                 }
 
                 if (isQuotaError(result.error)) {
@@ -293,13 +372,13 @@ WRITING STYLE — this is the most important part:
 - Sound like a human journalist, not an AI. Vary your sentence length. Some sentences are short. Others build context and add weight before landing the point.
 - Write a punchy SEO headline first. No colons, no "How", no "Why", no "Everything You Need to Know". Just a direct, specific headline.
 - Your first sentence should drop the reader straight into the story — no "In a significant development", no "As the world watches", no "In today's rapidly evolving landscape". Just the news.
-- Never use these AI-filler phrases: "It is worth noting", "Furthermore", "Moreover", "In conclusion", "It is important to highlight", "Delve into", "In summary", "Shed light on", "Underscore", "Notably", "This underscores", "Landscape", "In an era of", "Navigate", "Pivotal".
+- Never use these AI-filler phrases: "It is worth noting", "Furthermore", "Moreover", "In conclusion", "It is important to highlight", "Delve into", "In summary", "Shed light on", "Underscore", "Notably", "This underscores", "Landscape", "In an era of", "Navigate", "Pivotal", "To be honest", "Arguably", "If you think about it", "For most people".
 - No section headers. No bullet points. No numbered lists. Pure flowing article prose only.
 - Write like you are telling a story to a smart reader who has 2 minutes. Be direct, be human, be clear.
 - Vary paragraph length. Not every paragraph is 3 sentences. Some are 1. Some are 4.
 - End the article naturally — a forward-looking sentence, a quote if one exists in the source, or a crisp final observation. Never end with "Only time will tell" or "remains to be seen".
 - Do not add any byline, photo captions, or "Tags:" at the end.
-- Do not explain what you are about to write. Begin immediately with the headline.
+- Do not explain what you are about to write. Begin immediately with the headline. Output article text only.
 
 Write the article now:
         """.trimIndent()
