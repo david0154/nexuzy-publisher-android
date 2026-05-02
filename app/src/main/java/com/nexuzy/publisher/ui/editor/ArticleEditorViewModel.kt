@@ -15,6 +15,7 @@ data class EditorPipelineState(
     val finalContent: String = "",
     val rewrittenTitle: String = "",
     val factFeedback: String = "",
+    val geminiDone: Boolean = false,
     val openAiDone: Boolean = false,
     val sarvamDone: Boolean = false,
     val seoDone: Boolean = false,
@@ -37,7 +38,7 @@ class ArticleEditorViewModel(application: Application) : AndroidViewModel(applic
     val pipelineState: LiveData<EditorPipelineState> = _pipelineState
 
     fun runPipeline(rssItem: RssItem) {
-        _pipelineState.value = EditorPipelineState(loading = true, statusText = "📝 AI pipeline starting…")
+        _pipelineState.value = EditorPipelineState(loading = true, statusText = "📝 AI pipeline starting...")
 
         viewModelScope.launch {
             val result = pipeline.processRssItem(rssItem) { progress ->
@@ -59,6 +60,7 @@ class ArticleEditorViewModel(application: Application) : AndroidViewModel(applic
                         finalContent   = result.finalContent,
                         rewrittenTitle = result.title,
                         factFeedback   = result.factCheckFeedback,
+                        geminiDone     = false,
                         openAiDone     = result.openAiDone,
                         sarvamDone     = result.sarvamDone,
                         seoDone        = result.seoDone,
@@ -77,7 +79,7 @@ class ArticleEditorViewModel(application: Application) : AndroidViewModel(applic
                 _pipelineState.postValue(
                     EditorPipelineState(
                         loading    = false,
-                        statusText = "❌ ${result.error}",
+                        statusText = "❌ Pipeline failed",
                         error      = result.error
                     )
                 )
@@ -86,11 +88,16 @@ class ArticleEditorViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun buildStatusText(result: AiPipeline.PipelineResult): String {
-        val score  = (result.confidenceScore * 100).toInt()
-        val seoTag = if (result.seoDone) " | SEO ✅" else " | SEO ⚠️"
-        val imgTag = if ((result.article?.imagePath ?: "").isNotBlank()) " | 🖼️ Image"
-                     else if ((result.article?.imageUrl ?: "").isNotBlank()) " | 🖼️ RSS img"
-                     else ""
-        return "✅ Done! Fact: $score%$seoTag$imgTag"
+        val badges = buildList {
+            if (result.openAiDone)  add("✅ OpenAI")
+            if (result.sarvamDone)  add("✅ Sarvam")
+            if (result.seoDone)     add("✅ SEO")
+            if (result.humanized)   add("✅ Humanized (${result.humanizeProvider})")
+            if (result.factCheckPassed) add("✅ Fact-check passed")
+        }
+        val confidence = if (result.confidenceScore > 0f)
+            " · Confidence: ${(result.confidenceScore * 100).toInt()}%" else ""
+        return if (badges.isEmpty()) "✅ Pipeline complete$confidence"
+        else "✅ ${badges.joinToString(" · ")}$confidence"
     }
 }

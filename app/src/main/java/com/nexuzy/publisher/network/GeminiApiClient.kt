@@ -59,7 +59,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         model: String = DEFAULT_MODEL,
         maxWords: Int = 800
     ): WriteResult = withContext(Dispatchers.IO) {
-        val apiKey = keyManager.getGeminiApiKey()
+        val apiKey = keyManager.getActiveGeminiKey()
         if (apiKey.isBlank()) return@withContext WriteResult(false, error = "No Gemini API key")
 
         val prompt = """
@@ -86,7 +86,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         title: String,
         content: String
     ): FactCheckResult = withContext(Dispatchers.IO) {
-        val apiKey = keyManager.getGeminiApiKey()
+        val apiKey = keyManager.getActiveGeminiKey()
         if (apiKey.isBlank()) return@withContext FactCheckResult(false, error = "No Gemini API key")
 
         val prompt = """
@@ -132,7 +132,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         category: String = "",
         model: String = DEFAULT_MODEL
     ): SeoResult = withContext(Dispatchers.IO) {
-        val apiKey = keyManager.getGeminiApiKey()
+        val apiKey = keyManager.getActiveGeminiKey()
         if (apiKey.isBlank()) return@withContext SeoResult(false, error = "No Gemini API key")
 
         val prompt = """

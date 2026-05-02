@@ -119,10 +119,6 @@ class ArticleEditorActivity : AppCompatActivity() {
                 binding.etArticleTitle.error = "Please enter a title"
                 return@setOnClickListener
             }
-            // Reset image lock when user re-runs pipeline so a better image can appear
-            if (!imageLockedByUser) {
-                // nothing — pipeline is free to update preview
-            }
             val item = RssItem(
                 title        = title,
                 description  = description.ifBlank { rssDescription },

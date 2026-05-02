@@ -53,6 +53,21 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         val error: String = ""
     )
 
+    data class HumanizeResult(
+        val success: Boolean,
+        val humanizedContent: String = "",
+        val error: String = ""
+    )
+
+    data class FactCheckResult(
+        val success: Boolean,
+        val isAccurate: Boolean = false,
+        val confidenceScore: Float = 0f,
+        val feedback: String = "",
+        val correctedContent: String = "",
+        val error: String = ""
+    )
+
     // ─── ROLE 1: Backup article writer ───────────────────────────────────────
 
     suspend fun writeArticle(
@@ -170,9 +185,9 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         title: String,
         articleContent: String,
         category: String
-    ): GeminiApiClient.SeoData {
+    ): GeminiApiClient.SeoResult {
         val apiKey = keyManager.getSarvamKey()
-        if (apiKey.isBlank()) return GeminiApiClient.SeoData(false, error = "Sarvam key not set")
+        if (apiKey.isBlank()) return GeminiApiClient.SeoResult(false, error = "Sarvam key not set")
 
         return try {
             Log.i("SarvamClient", "[ROLE 2] Generating SEO with sarvam-m backup")
@@ -200,15 +215,15 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 maxTokens    = 512
             )
 
-            if (!ok || text.isBlank()) return GeminiApiClient.SeoData(false, error = "Sarvam SEO error: $err")
+            if (!ok || text.isBlank()) return GeminiApiClient.SeoResult(false, error = "Sarvam SEO error: $err")
             parseSeoJson(text)
         } catch (e: Exception) {
             Log.e("SarvamClient", "generateSeoData error: ${e.message}")
-            GeminiApiClient.SeoData(false, error = e.message ?: "SEO error")
+            GeminiApiClient.SeoResult(false, error = e.message ?: "SEO error")
         }
     }
 
-    private fun parseSeoJson(raw: String): GeminiApiClient.SeoData {
+    private fun parseSeoJson(raw: String): GeminiApiClient.SeoResult {
         return try {
             val cleaned = raw.trim()
                 .removePrefix("```json").removePrefix("```")
@@ -216,7 +231,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             val json = JsonParser.parseString(cleaned).asJsonObject
             val arr  = json.getAsJsonArray("tags")
             val tags = (0 until arr.size()).map { arr[it].asString }
-            GeminiApiClient.SeoData(
+            GeminiApiClient.SeoResult(
                 success         = true,
                 tags            = tags,
                 metaKeywords    = json.get("meta_keywords")?.asString  ?: tags.joinToString(", "),
@@ -225,28 +240,118 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             )
         } catch (e: Exception) {
             Log.e("SarvamClient", "parseSeoJson error: ${e.message} | raw=$raw")
-            GeminiApiClient.SeoData(false, error = "SEO parse failed: ${e.message}")
+            GeminiApiClient.SeoResult(false, error = "SEO parse failed: ${e.message}")
         }
     }
 
-    // ─── ROLE 3: Grammar check + Humanise pass ───────────────────────────────
+    // ─── ROLE 3: Fact check ───────────────────────────────────────────────────
+
+    suspend fun factCheckArticle(
+        title: String,
+        content: String
+    ): FactCheckResult {
+        val apiKey = keyManager.getSarvamKey()
+        if (apiKey.isBlank()) return FactCheckResult(false, error = "Sarvam key not set")
+
+        return try {
+            val prompt = """
+                You are a fact-checking editor. Analyse this news article for factual accuracy.
+                Title: $title
+                Article: ${content.take(2000)}
+
+                Respond ONLY in JSON:
+                {
+                  "is_accurate": true/false,
+                  "confidence_score": 0.0-1.0,
+                  "feedback": "brief explanation",
+                  "corrected_content": ""
+                }
+            """.trimIndent()
+
+            val (ok, text, err) = callChatSync(
+                apiKey,
+                systemPrompt = "You are a fact-checking editor. Always respond with valid JSON only.",
+                userPrompt   = prompt,
+                temperature  = 0.2,
+                maxTokens    = 512
+            )
+
+            if (!ok || text.isBlank()) return FactCheckResult(false, error = "Sarvam fact-check error: $err")
+
+            val cleaned = text.trim()
+                .removePrefix("```json").removePrefix("```")
+                .removeSuffix("```").trim()
+            val obj = com.google.gson.JsonParser.parseString(cleaned).asJsonObject
+            FactCheckResult(
+                success         = true,
+                isAccurate      = obj.get("is_accurate")?.asBoolean ?: false,
+                confidenceScore = obj.get("confidence_score")?.asFloat ?: 0f,
+                feedback        = obj.get("feedback")?.asString ?: "",
+                correctedContent = obj.get("corrected_content")?.asString ?: ""
+            )
+        } catch (e: Exception) {
+            Log.e("SarvamClient", "factCheckArticle error: ${e.message}")
+            FactCheckResult(false, error = e.message ?: "Fact-check error")
+        }
+    }
+
+    // ─── ROLE 4: Humanize article ─────────────────────────────────────────────
+
+    suspend fun humanizeArticle(
+        title: String,
+        content: String
+    ): HumanizeResult {
+        val apiKey = keyManager.getSarvamKey()
+        if (apiKey.isBlank()) return HumanizeResult(false, error = "Sarvam key not set")
+
+        return try {
+            val chunks = splitIntoChunks(content, 1800)
+            val corrected = mutableListOf<String>()
+
+            for (chunk in chunks) {
+                val (ok, text, err) = callChatSync(
+                    apiKey,
+                    systemPrompt = "You are a senior news editor. Rewrite the article to sound like a human journalist. " +
+                        "Remove AI phrasing. Keep all facts unchanged. Output only the rewritten text — no notes, no tags.",
+                    userPrompt = buildHumaniseChunkPrompt(chunk),
+                    temperature = 1.0,
+                    maxTokens = SARVAM_MAX_TOKENS,
+                    frequencyPenalty = 0.5,
+                    presencePenalty  = 0.4
+                )
+                corrected.add(if (ok && text.isNotBlank()) cleanArticleOutput(text) else chunk)
+            }
+
+            val joined = corrected.joinToString(" ")
+            if (joined.length < content.length / 2) {
+                HumanizeResult(false, humanizedContent = content, error = "Humanize result too short — original kept")
+            } else {
+                HumanizeResult(true, humanizedContent = joined)
+            }
+        } catch (e: Exception) {
+            Log.e("SarvamClient", "humanizeArticle error: ${e.message}")
+            HumanizeResult(false, humanizedContent = content, error = e.message ?: "Humanize error")
+        }
+    }
+
+    // ─── ROLE 5: Grammar check + Humanise pass ───────────────────────────────
 
     suspend fun checkGrammarAndSpelling(content: String): GrammarCheckResult {
         if (content.isBlank()) return GrammarCheckResult(true, content)
 
         val apiKey = keyManager.getSarvamKey()
         if (apiKey.isBlank()) {
-            Log.w("SarvamClient", "[ROLE 3] Sarvam key not set — skipping grammar/humanise step")
+            Log.w("SarvamClient", "[ROLE 5] Sarvam key not set — skipping grammar/humanise step")
             return GrammarCheckResult(true, content, error = "Sarvam key not configured; grammar check skipped")
         }
 
         return try {
-            Log.i("SarvamClient", "[ROLE 3] Running grammar + humanise pass")
+            Log.i("SarvamClient", "[ROLE 5] Running grammar + humanise pass")
             val chunks = splitIntoChunks(content, 1800)
             val corrected = mutableListOf<String>()
 
             for ((i, chunk) in chunks.withIndex()) {
-                Log.d("SarvamClient", "[ROLE 3] Processing chunk ${i + 1}/${chunks.size}")
+                Log.d("SarvamClient", "[ROLE 5] Processing chunk ${i + 1}/${chunks.size}")
                 val (ok, text, err) = callChatSync(
                     apiKey,
                     systemPrompt = "You are a senior news editor. Fix grammar, spelling, and robotic phrasing. " +
@@ -260,19 +365,19 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 )
                 val safeResult = if (ok && text.isNotBlank()) cleanArticleOutput(text) else chunk
                 if (!ok || text.isBlank()) {
-                    Log.w("SarvamClient", "[ROLE 3] Chunk ${i + 1} error ($err) — keeping original")
+                    Log.w("SarvamClient", "[ROLE 5] Chunk ${i + 1} error ($err) — keeping original")
                 }
                 corrected.add(safeResult)
             }
 
             val joined = corrected.joinToString(" ")
             if (joined.length < content.length / 2) {
-                Log.w("SarvamClient", "[ROLE 3] Result too short — returning original")
+                Log.w("SarvamClient", "[ROLE 5] Result too short — returning original")
                 return GrammarCheckResult(true, content, error = "Grammar result too short — original kept")
             }
             GrammarCheckResult(true, joined)
         } catch (e: Exception) {
-            Log.e("SarvamClient", "[ROLE 3] Error: ${e.message} — returning original")
+            Log.e("SarvamClient", "[ROLE 5] Error: ${e.message} — returning original")
             GrammarCheckResult(false, content, error = e.message ?: "Grammar/humanise error")
         }
     }
@@ -308,7 +413,6 @@ Write the article now:
         """.trimIndent()
     }
 
-    /** Simpler fallback prompt used on retry when the model returns only junk on first attempt. */
     private fun buildSimpleArticlePrompt(
         title: String, desc: String, maxWords: Int
     ): String {
