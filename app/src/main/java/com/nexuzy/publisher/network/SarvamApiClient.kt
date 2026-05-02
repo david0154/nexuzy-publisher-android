@@ -21,33 +21,33 @@ import java.util.concurrent.TimeUnit
  *
  * ROLE 1 — writeArticle():
  *   Backup article writer when ALL Gemini keys/models are exhausted.
- *   Uses the same journalist-persona prompt style as GeminiApiClient
- *   so backup articles sound as human as primary ones.
+ *   maxWords is clamped to 300–650 so Sarvam never over-runs its token budget.
+ *   max_tokens raised to 4096 so a full article is never truncated.
  *
  * ROLE 2 — generateSeoData():
  *   Backup SEO generator when Gemini SEO also fails.
  *
  * ROLE 3 — checkGrammarAndSpelling():
  *   Grammar + spelling correction PLUS humanise pass after writing.
- *   Strips AI thinking leakage, fixes grammar, rewrites robotic phrasing
- *   in a natural journalist voice. Non-blocking: falls back to original
- *   if Sarvam key is not set.
- *
- * HUMAN WRITING FIX (v2):
- *   - writeArticle: temperature 0.3 → 1.05, journalist persona prompt,
- *     banned AI-filler word list, no bullet-rule instructions
- *   - checkGrammarAndSpelling: temperature 0.3 → 1.0, rewritten as senior
- *     editor humanise pass (not just grammar cop)
- *   - frequencyPenalty + presencePenalty added to both writing calls
+ *   Safe fallback: if Sarvam returns blank or errors, the ORIGINAL content
+ *   is returned unchanged — never replaces good content with a broken response.
+ *   max_tokens raised to 4096 for grammar pass too.
  */
 class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)
         .build()
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
+
+    // ─── ARTICLE TOKEN BUDGET ─────────────────────────────────────────────────────────────
+    // 650 words ≈ ~900 tokens output. 4096 max_tokens gives plenty of headroom
+    // for the full prompt + response without truncation.
+    private val SARVAM_MAX_TOKENS = 4096
+    private val SARVAM_MIN_WORDS  = 300
+    private val SARVAM_MAX_WORDS  = 650
 
     // ─── Data classes ─────────────────────────────────────────────────────────────────────
 
@@ -71,16 +71,20 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         rssDescription: String,
         rssFullContent: String = "",
         category: String = "",
-        maxWords: Int = 800
+        maxWords: Int = 600
     ): WriteArticleResult {
         val apiKey = keyManager.getSarvamKey()
         if (apiKey.isBlank()) return WriteArticleResult(
             false,
             error = "Sarvam API key not configured. Add your key in Settings."
         )
+
+        // Clamp word count to safe Sarvam range: 300–650
+        val safeWords = maxWords.coerceIn(SARVAM_MIN_WORDS, SARVAM_MAX_WORDS)
+        Log.i("SarvamClient", "[ROLE 1] Writing article ($safeWords words) as Gemini backup")
+
         return try {
-            Log.i("SarvamClient", "[ROLE 1] Writing article as Gemini backup with sarvam-m")
-            val prompt = buildArticlePrompt(rssTitle, rssDescription, rssFullContent, category, maxWords)
+            val prompt = buildArticlePrompt(rssTitle, rssDescription, rssFullContent, category, safeWords)
             callChat(
                 apiKey,
                 systemPrompt = "You are a seasoned news journalist with 15 years of experience. " +
@@ -88,13 +92,20 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                     "Start immediately with the headline.",
                 userPrompt = prompt,
                 temperature = 1.05,
+                maxTokens = SARVAM_MAX_TOKENS,
                 frequencyPenalty = 0.4,
                 presencePenalty = 0.3
             ).let { (ok, text, err) ->
-                if (ok) WriteArticleResult(true, text)
-                else WriteArticleResult(false, error = err)
+                if (ok && text.isNotBlank()) {
+                    Log.i("SarvamClient", "[ROLE 1] Success — ${text.split("\\s+".toRegex()).size} words written")
+                    WriteArticleResult(true, text)
+                } else {
+                    Log.e("SarvamClient", "[ROLE 1] Failed: $err")
+                    WriteArticleResult(false, error = err)
+                }
             }
         } catch (e: Exception) {
+            Log.e("SarvamClient", "[ROLE 1] Exception: ${e.message}")
             WriteArticleResult(false, error = e.message ?: "Sarvam write error")
         }
     }
@@ -131,7 +142,8 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 apiKey,
                 systemPrompt = "You are an SEO expert. Always respond with valid JSON only.",
                 userPrompt   = prompt,
-                temperature  = 0.2
+                temperature  = 0.2,
+                maxTokens    = 512
             )
 
             if (!ok || text.isBlank()) return GeminiApiClient.SeoData(false, error = "Sarvam SEO error: $err")
@@ -166,17 +178,15 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
     // ─── ROLE 3: Grammar check + Humanise pass ──────────────────────────────────────────
 
     /**
-     * Grammar + spelling correction AND humanise pass using sarvam-m.
+     * Grammar + spelling correction AND humanise pass.
      *
-     * This does TWO things in one pass:
-     *   1. Strips any AI thinking text that leaked in ("Okay, let me...", etc.)
-     *   2. Rewrites robotic AI phrasing into natural journalist language
-     *   3. Fixes grammar and spelling errors
-     *
-     * Processes in 1800-char chunks. Non-blocking: falls back to original
-     * if Sarvam key not set.
+     * SAFE FALLBACK: If Sarvam returns a blank or errored response for ANY chunk,
+     * that chunk keeps the original text — we never replace good content with nothing.
+     * The full original is also returned if the key is missing or an exception occurs.
      */
     suspend fun checkGrammarAndSpelling(content: String): GrammarCheckResult {
+        if (content.isBlank()) return GrammarCheckResult(true, content)
+
         val apiKey = keyManager.getSarvamKey()
         if (apiKey.isBlank()) {
             Log.w("SarvamClient", "[ROLE 3] Sarvam key not set — skipping grammar/humanise step")
@@ -187,7 +197,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         }
 
         return try {
-            Log.i("SarvamClient", "[ROLE 3] Running grammar + humanise pass with sarvam-m")
+            Log.i("SarvamClient", "[ROLE 3] Running grammar + humanise pass")
             val chunks = splitIntoChunks(content, 1800)
             val corrected = mutableListOf<String>()
 
@@ -202,16 +212,29 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                         "Output only the rewritten text — no notes, no commentary.",
                     userPrompt = buildHumaniseChunkPrompt(chunk),
                     temperature = 1.0,
+                    maxTokens = SARVAM_MAX_TOKENS,
                     frequencyPenalty = 0.5,
                     presencePenalty  = 0.4
                 )
-                corrected.add(if (ok && text.isNotBlank()) text else chunk)
-                if (!ok) Log.w("SarvamClient", "[ROLE 3] Chunk ${i + 1} error: $err")
+                // SAFE: only use Sarvam result if it's non-blank; otherwise keep original chunk
+                val safeResult = if (ok && text.isNotBlank()) text else chunk
+                if (!ok || text.isBlank()) {
+                    Log.w("SarvamClient", "[ROLE 3] Chunk ${i + 1} returned blank/error ($err) — keeping original")
+                }
+                corrected.add(safeResult)
             }
 
-            GrammarCheckResult(true, corrected.joinToString(" "))
+            val joined = corrected.joinToString(" ")
+            // Final safety: if joined result is shorter than 50% of original, something went wrong
+            if (joined.length < content.length / 2) {
+                Log.w("SarvamClient", "[ROLE 3] Result suspiciously short (${joined.length} vs ${content.length}) — returning original")
+                return GrammarCheckResult(true, content, error = "Grammar result too short — original kept")
+            }
+
+            GrammarCheckResult(true, joined)
         } catch (e: Exception) {
-            Log.e("SarvamClient", "[ROLE 3] Error: ${e.message}")
+            Log.e("SarvamClient", "[ROLE 3] Error: ${e.message} — returning original content")
+            // Always return original on exception — never return blank
             GrammarCheckResult(false, content, error = e.message ?: "Grammar/humanise error")
         }
     }
@@ -223,7 +246,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
     ): String {
         val today = SimpleDateFormat("MMMM d, yyyy", Locale.ENGLISH).format(Date())
         val source = if (full.isNotBlank())
-            "--- SOURCE ARTICLE ---\n${full.take(3500)}\n--- END SOURCE ---\nRSS summary: $desc"
+            "--- SOURCE ARTICLE ---\n${full.take(3000)}\n--- END SOURCE ---\nRSS summary: $desc"
         else
             "RSS summary: $desc\n(Full article unavailable — write from title and summary.)"
 
@@ -236,16 +259,16 @@ SOURCE MATERIAL:
 Headline: $title
 $source
 
-Write a compelling, publish-ready news article of approximately $maxWords words based only on the facts above. Do not invent quotes, statistics, or events not present in the source.
+Write a compelling, publish-ready news article of approximately $maxWords words (between ${maxWords - 50} and ${maxWords + 50} words) based only on the facts above. Do not invent quotes, statistics, or events not present in the source.
 
 WRITING STYLE:
-- Sound like a human journalist, not an AI. Vary your sentence length. Some sentences are short. Others build context before landing the point.
-- Write a punchy SEO headline first. Direct and specific — no colons, no "How", no "Why", no "Everything You Need to Know".
-- Your first sentence drops the reader straight into the story. No "In a significant development", no "As the world watches", no "In today's rapidly evolving landscape".
+- Sound like a human journalist, not an AI. Vary your sentence length.
+- Write a punchy SEO headline first. Direct and specific.
+- Your first sentence drops the reader straight into the story. No "In a significant development", no "In today's rapidly evolving landscape".
 - Never use: "Furthermore", "Moreover", "In conclusion", "It is worth noting", "Delve into", "This underscores", "Notably", "Landscape", "In an era of", "Navigate", "Pivotal", "Shed light on".
 - No section headers. No bullet points. Pure flowing article prose only.
-- Vary paragraph length. Not every paragraph is 3 sentences. Some are one. Some are four.
-- End naturally — a forward-looking sentence, a real quote from the source, or a crisp observation. Never "Only time will tell" or "remains to be seen".
+- Vary paragraph length. Some paragraphs are one sentence. Some are three or four.
+- End naturally — never "Only time will tell" or "remains to be seen".
 - Do not add bylines, photo captions, or Tags at the end.
 
 Write the article now (headline first, then body paragraphs):
@@ -279,6 +302,7 @@ Rewritten text:
         systemPrompt: String,
         userPrompt: String,
         temperature: Double = 0.7,
+        maxTokens: Int = SARVAM_MAX_TOKENS,
         frequencyPenalty: Double = 0.0,
         presencePenalty: Double = 0.0
     ): Triple<Boolean, String, String> {
@@ -288,10 +312,10 @@ Rewritten text:
                 add(JsonObject().apply { addProperty("role", "user");   addProperty("content", userPrompt)   })
             }
             val body = JsonObject().apply {
-                addProperty("model",             "sarvam-m")
-                add("messages",                  messages)
-                addProperty("temperature",       temperature)
-                addProperty("max_tokens",        2048)
+                addProperty("model",       "sarvam-m")
+                add("messages",            messages)
+                addProperty("temperature", temperature)
+                addProperty("max_tokens",  maxTokens)
                 if (frequencyPenalty != 0.0) addProperty("frequency_penalty", frequencyPenalty)
                 if (presencePenalty  != 0.0) addProperty("presence_penalty",  presencePenalty)
             }
@@ -307,8 +331,9 @@ Rewritten text:
             if (response.isSuccessful) {
                 val content = parseChatReply(respBody)
                 if (content.isNotBlank()) Triple(true, content, "")
-                else Triple(false, "", "Empty response")
+                else Triple(false, "", "Empty response from Sarvam")
             } else {
+                Log.e("SarvamClient", "HTTP ${response.code}: $respBody")
                 Triple(false, "", "HTTP ${response.code}")
             }
         } catch (e: Exception) {
@@ -321,10 +346,11 @@ Rewritten text:
         systemPrompt: String,
         userPrompt: String,
         temperature: Double = 0.7,
+        maxTokens: Int = SARVAM_MAX_TOKENS,
         frequencyPenalty: Double = 0.0,
         presencePenalty: Double = 0.0
     ): Triple<Boolean, String, String> =
-        callChatSync(apiKey, systemPrompt, userPrompt, temperature, frequencyPenalty, presencePenalty)
+        callChatSync(apiKey, systemPrompt, userPrompt, temperature, maxTokens, frequencyPenalty, presencePenalty)
 
     private fun parseChatReply(responseBody: String): String {
         return try {
@@ -332,7 +358,10 @@ Rewritten text:
                 .getAsJsonArray("choices")[0].asJsonObject
                 .getAsJsonObject("message")
                 .get("content").asString.trim()
-        } catch (e: Exception) { "" }
+        } catch (e: Exception) {
+            Log.e("SarvamClient", "parseChatReply error: ${e.message} | body=${responseBody.take(200)}")
+            ""
+        }
     }
 
     private fun splitIntoChunks(text: String, size: Int): List<String> {
