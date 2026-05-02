@@ -1,228 +1,161 @@
 package com.nexuzy.publisher.ai
 
 import android.util.Log
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
- * OfflineArticleWriter
+ * OfflineArticleWriter — builds structured prompts and uses OfflineGemmaClient
+ * to generate a full, publish-ready news article from an RSS item.
  *
- * Generates a full news article using an offline Gemma model via a
- * multi-step pipeline. Designed for when ALL online API keys are exhausted
- * (Gemini quota + Sarvam key missing).
+ * Called by AiPipeline Stage 1 Tier C (final fallback when both Gemini and
+ * Sarvam are unavailable / quota-exceeded).
  *
- * ─── PIPELINE ───────────────────────────────────────────────────────────────
- *
- *   Step 1 │ OUTLINE   │ Generate 4-point article outline
- *   Step 2 │ EXPAND    │ Write ~100 words per outline section
- *   Step 3 │ MERGE     │ Combine sections into flowing article
- *   Step 4 │ CLEAN     │ Fix grammar, remove AI filler, ensure clean output
- *
- * ─── WHY MULTI-STEP? ────────────────────────────────────────────────────────
- *
- *   Gemma 3B on-device has a limited context window (~8k tokens) and tends to
- *   lose structure when asked to write 400+ words in one shot.
- *   Breaking generation into small focused steps (outline → 100-word sections
- *   → merge → clean) produces far better output quality.
- *
- * ─── USAGE ──────────────────────────────────────────────────────────────────
- *
- *   val writer = OfflineArticleWriter(offlineGemmaClient)
- *   val result = writer.write(
- *       title       = rssItem.title,
- *       description = rssItem.description,
- *       category    = rssItem.feedCategory,
- *       targetWords = 400,
- *       onProgress  = { step, msg -> updateUi(msg) }
- *   )
- *   if (result.success) showArticle(result.content)
+ * Writing strategy:
+ *   1. Headline
+ *   2. Lead paragraph (who/what/when/where/why in ≤ 3 sentences)
+ *   3. Body paragraphs (context, quotes if available, impact)
+ *   4. Closing paragraph (what to watch next)
  */
-class OfflineArticleWriter(private val gemma: OfflineGemmaClient) {
+class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
 
     companion object {
-        private const val TAG = "OfflineWriter"
-        private const val WORDS_PER_SECTION = 100
-        private const val OUTLINE_SECTIONS  = 4
+        private const val TAG = "OfflineArticleWriter"
     }
 
     data class WriteResult(
         val success: Boolean,
         val content: String = "",
-        val error: String   = ""
+        val error: String = ""
     )
 
-    // ─── Main entry point ─────────────────────────────────────────────────────
-
+    /**
+     * Generate a full news article on-device.
+     *
+     * @param title        RSS item headline (used as article basis)
+     * @param description  RSS snippet / summary
+     * @param category     Feed category (Technology, Sports, etc.)
+     * @param targetWords  Approximate word count to aim for
+     * @param onProgress   Optional callback for UI progress messages
+     */
     suspend fun write(
         title: String,
         description: String,
-        category: String = "General",
-        targetWords: Int  = 400,
-        onProgress: ((step: Int, message: String) -> Unit)? = null
-    ): WriteResult {
+        category: String,
+        targetWords: Int = 600,
+        onProgress: ((step: String, message: String) -> Unit)? = null
+    ): WriteResult = withContext(Dispatchers.IO) {
 
-        if (!gemma.isModelReady()) {
-            return WriteResult(false, error = "Offline model not downloaded. Go to Settings → Download AI Model.")
+        if (!gemmaClient.isModelReady()) {
+            return@withContext WriteResult(
+                success = false,
+                error   = "Offline model not ready. Download it in Settings \u2192 AI Model."
+            )
         }
 
-        Log.i(TAG, "Starting offline write: '$title'")
+        onProgress?.invoke("BUILD_PROMPT", "\uD83D\uDCF1 Building offline prompt\u2026")
+        val prompt = buildArticlePrompt(title, description, category, targetWords)
+        Log.d(TAG, "Prompt length: ${prompt.length} chars")
 
-        // ── Step 1: Generate outline ──────────────────────────────────────
-        onProgress?.invoke(1, "🧠 Generating outline...")
-        val outlineResult = gemma.generate(
-            prompt = buildOutlinePrompt(title, description, category),
-            maxTokens = 200,
-            temperature = 0.7f
+        val sb = StringBuilder()
+        onProgress?.invoke("INFERRING", "\uD83E\uDD16 Gemma generating article (offline)\u2026")
+
+        val result = gemmaClient.generate(
+            prompt    = prompt,
+            maxTokens = estimateTokens(targetWords),
+            onToken   = { token ->
+                sb.append(token)
+                if (sb.length % 200 == 0) {
+                    onProgress?.invoke("INFERRING",
+                        "\uD83D\uDCDD ${sb.length / 5} words written\u2026")
+                }
+            }
         )
 
-        if (!outlineResult.success || outlineResult.text.isBlank()) {
-            Log.e(TAG, "Outline failed: ${outlineResult.error}")
-            return WriteResult(false, error = "Outline step failed: ${outlineResult.error}")
+        if (!result.success) {
+            return@withContext WriteResult(success = false, error = result.error)
         }
 
-        val sections = parseOutline(outlineResult.text)
-        Log.i(TAG, "Outline: ${sections.size} sections: $sections")
+        val raw = if (sb.isNotEmpty()) sb.toString() else result.text
+        val cleaned = postProcess(raw, title)
 
-        if (sections.isEmpty()) {
-            return WriteResult(false, error = "Could not parse outline from model output")
-        }
+        Log.i(TAG, "Offline article: ${cleaned.length} chars, ~${cleaned.split(" ").size} words")
+        onProgress?.invoke("DONE", "\u2705 Offline article written (${cleaned.split(" ").size} words)")
 
-        // ── Step 2: Expand each section ───────────────────────────────────
-        val contentParts = mutableListOf<String>()
-        for ((i, section) in sections.withIndex()) {
-            onProgress?.invoke(2, "✍️ Writing section ${i + 1}/${sections.size}: $section")
-            val sectionResult = gemma.generate(
-                prompt    = buildSectionPrompt(section, title, category, WORDS_PER_SECTION),
-                maxTokens = 300,
-                temperature = 0.85f
-            )
-            val text = if (sectionResult.success && sectionResult.text.isNotBlank())
-                sectionResult.text.trim()
-            else {
-                Log.w(TAG, "Section '${section}' failed — skipping")
-                continue
-            }
-            contentParts.add(text)
-        }
+        WriteResult(success = cleaned.isNotBlank(), content = cleaned,
+            error = if (cleaned.isBlank()) "Model produced empty output" else "")
+    }
 
-        if (contentParts.isEmpty()) {
-            return WriteResult(false, error = "All section expansions failed")
-        }
+    // ──────────────────────────────────────────────────────────────────────────
+    // Prompt builder
+    // ──────────────────────────────────────────────────────────────────────────
 
-        // ── Step 3: Merge sections into flowing article ───────────────────
-        onProgress?.invoke(3, "📄 Merging sections...")
-        val merged = contentParts.joinToString("\n\n")
+    private fun buildArticlePrompt(
+        title: String,
+        description: String,
+        category: String,
+        targetWords: Int
+    ): String {
+        val desc = description.trim().take(600).ifBlank { "No additional description available." }
+        return """
+<|system|>
+You are a professional news journalist. Write factual, neutral, human-readable news articles.
+Never add disclaimers. Never say you are an AI. Output only the article.
+<|end|>
+<|user|>
+Write a $targetWords-word news article for the $category section.
 
-        // If merged content is already good length, skip the merge pass to save tokens
-        val mergedWords = merged.split("\s+".toRegex()).size
-        val currentContent: String
+Source headline : $title
+Source summary  : $desc
 
-        if (mergedWords >= targetWords * 0.7) {
-            // Content is long enough — just clean it instead of a full merge pass
-            Log.i(TAG, "Merged $mergedWords words — skipping merge rewrite, going to clean")
-            currentContent = merged
-        } else {
-            val mergeResult = gemma.generate(
-                prompt    = buildMergePrompt(title, merged, targetWords),
-                maxTokens = 700,
-                temperature = 0.75f
-            )
-            currentContent = if (mergeResult.success && mergeResult.text.isNotBlank())
-                mergeResult.text
-            else {
-                Log.w(TAG, "Merge pass failed — using raw merged sections")
-                merged
-            }
-        }
+STRICT RULES:
+- Start with the headline on the first line (no "Headline:" prefix)
+- Then a blank line
+- Lead paragraph: answer Who, What, When, Where, Why in \u2264 3 sentences
+- 3-4 body paragraphs with facts, context, and impact
+- Short closing paragraph: what happens next
+- No markdown, no bullet points, no headers inside the article
+- No AI phrases: "notably", "in conclusion", "it is worth noting", "game-changer"
+- Natural contractions: it's, don't, hasn't, they've
+- Active voice where possible
+- Vary sentence length
+- Total article \u2248 $targetWords words
 
-        // ── Step 4: Clean + improve grammar ──────────────────────────────
-        onProgress?.invoke(4, "✨ Finalising article...")
-        val cleanResult = gemma.generate(
-            prompt    = buildCleanPrompt(currentContent),
-            maxTokens = 800,
-            temperature = 0.6f
+Write the complete article now:
+<|end|>
+<|assistant|>
+        """.trimIndent()
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Post-processing: strip artifacts from model output
+    // ──────────────────────────────────────────────────────────────────────────
+
+    private fun postProcess(raw: String, originalTitle: String): String {
+        var text = raw.trim()
+
+        // Remove common model padding tokens
+        val stripPatterns = listOf(
+            "<|end|>", "<|assistant|>", "<|user|>", "<|system|>",
+            "<end_of_turn>", "[INST]", "[/INST]", "</s>",
+            "<s>", "<bos>", "<eos>"
         )
+        stripPatterns.forEach { text = text.replace(it, "") }
 
-        val finalContent = if (cleanResult.success && cleanResult.text.isNotBlank() &&
-            cleanResult.text.length >= currentContent.length / 2)
-            cleanResult.text
-        else {
-            Log.w(TAG, "Clean pass failed or too short — using merged content")
-            gemma.cleanOutput(currentContent) // Apply at least the regex cleaner
-        }
+        // If model echoed the prompt header, strip everything before the article
+        val articleStart = text.indexOfFirst { it.isLetter() }
+        if (articleStart > 0) text = text.substring(articleStart)
 
-        val finalWords = finalContent.split("\\s+".toRegex()).size
-        Log.i(TAG, "Offline write complete: $finalWords words")
+        // Ensure article starts with a headline (use original if model omitted it)
+        val lines = text.lines().map { it.trim() }.filter { it.isNotBlank() }
+        if (lines.isEmpty()) return ""
 
-        return WriteResult(true, finalContent)
+        val hasHeadline = lines.first().length in 20..120
+        val body = if (hasHeadline) text else "$originalTitle\n\n$text"
+
+        return body.trim()
     }
 
-    // ─── Prompt builders ──────────────────────────────────────────────────────
-
-    private fun buildOutlinePrompt(title: String, description: String, category: String) =
-        """Create a $OUTLINE_SECTIONS-point outline for a news article.
-Headline: $title
-Summary: $description
-Category: $category
-
-Output only $OUTLINE_SECTIONS section titles, one per line. No numbering. No explanation."""
-
-    private fun buildSectionPrompt(
-        section: String, title: String, category: String, words: Int
-    ) = """Write exactly $words words about: $section
-News topic: $title
-Category: $category
-Tone: Professional journalist
-Audience: General readers
-
-Rules:
-- Start directly with the paragraph. No heading.
-- No AI openers like "Certainly" or "Sure".
-- No bullet points. Pure flowing prose.
-- End with a complete sentence."""
-
-    private fun buildMergePrompt(title: String, content: String, targetWords: Int) =
-        """You are a news editor. Combine these article sections into one smooth $targetWords-word article.
-Headline: $title
-
-$content
-
-Rules:
-- Keep all facts, names, numbers exactly as written.
-- Fix transitions between sections so it reads as one article.
-- Remove duplicate sentences.
-- Output only the article text. No preamble. No tags."""
-
-    private fun buildCleanPrompt(content: String) =
-        """Fix grammar, spelling, and flow of this news article.
-Remove any AI thinking text or meta-commentary.
-Do NOT change facts, names, numbers, or dates.
-Output only the corrected article text. No tags. No hashtags.
-
-Article:
-$content
-
-Corrected article:"""
-
-    // ─── Outline parser ───────────────────────────────────────────────────────
-
-    /**
-     * Parses the outline into a list of section titles.
-     * Strips numbering, bullets, and blank lines.
-     * Falls back to splitting by newline if no clean lines found.
-     */
-    private fun parseOutline(outline: String): List<String> {
-        val cleanLineRegex = Regex("""^[\d\-.*•]+[.)\s]+""")
-        val lines = outline.lines()
-            .map { it.trim().replace(cleanLineRegex, "").trim() }
-            .filter { it.isNotBlank() && it.length > 4 }
-            .take(OUTLINE_SECTIONS)
-
-        return lines.ifEmpty {
-            // Absolute fallback: split on any separator
-            outline.split(Regex("[\n;,]"))
-                .map { it.trim() }
-                .filter { it.isNotBlank() && it.length > 4 }
-                .take(OUTLINE_SECTIONS)
-        }
-    }
+    // Rough heuristic: ~0.75 words per token for English news text
+    private fun estimateTokens(targetWords: Int): Int = (targetWords / 0.75).toInt().coerceIn(256, 2048)
 }
