@@ -91,6 +91,14 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
 
     private fun buildFactCheckPrompt(title: String, content: String): String {
         return """
+            CRITICAL OUTPUT RULES:
+            - Respond ONLY with the JSON object specified below. Nothing before it, nothing after it.
+            - If corrected_content is needed, output ONLY the clean corrected article text.
+            - Do NOT include any thinking, reasoning, planning, or commentary in corrected_content.
+            - Do NOT start corrected_content with "Okay", "Let me", "Here is", "I have", "Sure", or any preamble.
+            - corrected_content must begin directly with the article headline and end with the last article paragraph.
+            - corrected_content must contain ONLY the publishable article — no meta-text, no notes, no explanations.
+
             You are a professional fact-checker for a news agency. Review the following news article and check all factual claims.
 
             Article Title: $title
@@ -100,18 +108,19 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
 
             Your task:
             1. Identify any factual errors or unverifiable claims
-            2. Check if statistics, dates, names are accurate
+            2. Check if statistics, dates, names, and titles are accurate
             3. Flag any misleading statements
             4. Verify against the latest publicly known internet/news context when possible
-            5. Provide a confidence score (0-100)
+            5. If corrections are needed, rewrite ONLY the corrected article body in corrected_content (clean, publishable text only)
+            6. Provide a confidence score (0-100)
 
             Respond ONLY in this exact JSON format:
             {
               "is_accurate": true/false,
               "confidence_score": 85,
-              "issues_found": ["list of specific issues or empty array"],
-              "feedback": "Brief overall assessment",
-              "corrected_content": "Full corrected article content if changes needed, or empty string if accurate"
+              "issues_found": ["list of specific issues, or empty array if none"],
+              "feedback": "Brief overall assessment in 1-2 sentences",
+              "corrected_content": "Full corrected article text if changes were needed, or empty string if article is already accurate"
             }
         """.trimIndent()
     }
@@ -122,7 +131,7 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
             {
               "model": "$model",
               "messages": [
-                {"role": "system", "content": "You are an expert fact-checker. Always respond in valid JSON."},
+                {"role": "system", "content": "You are an expert fact-checker. Always respond in valid JSON only. Never output anything outside the JSON object."},
                 {"role": "user", "content": $escapedPrompt}
               ],
               "temperature": 0.2,
