@@ -7,28 +7,29 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * OfflineGemmaClient — wraps Google's MediaPipe LLM Inference API
- * to run Gemma 3n (or any GGUF/TFLite model) fully on-device.
+ * OfflineGemmaClient — "Devil AI 2B"
+ * ═══════════════════════════════════════════════════════════════════════
+ * On-device LLM client using the Devil AI 2B model
+ * (Gemma-2-2B-IT GGUF, ~1.5 GB, auto-downloaded from HuggingFace).
  *
- * Model placement:
- *   /sdcard/Android/data/com.nexuzy.publisher/files/models/gemma3n.bin
- *   (or wherever getModelFile() points)
+ * Uses Google MediaPipe tasks-genai for inference.
+ * Dependency: implementation 'com.google.mediapipe:tasks-genai:0.10.14'
  *
- * Dependencies to add in app/build.gradle:
- *   implementation 'com.google.mediapipe:tasks-genai:0.10.14'
- *
- * Falls back gracefully if model is not downloaded yet —
- * isModelReady() returns false and generate() returns an error result.
+ * If MediaPipe is not available, gracefully returns an error — it never
+ * crashes the app.
  */
 class OfflineGemmaClient(private val context: Context) {
 
     companion object {
-        private const val TAG = "OfflineGemmaClient"
-        private const val MODEL_FILENAME = "gemma3n.bin"
-        private const val MAX_TOKENS = 1024
-        private const val TEMPERATURE = 0.7f
-        private const val TOP_K = 40
+        private const val TAG = "DevilAI2B"
+        const val MODEL_DISPLAY_NAME = "Devil AI 2B"
+        const val MODEL_DESCRIPTION  = "On-device AI writer • No internet needed • Gemma 2B"
+        private const val MAX_TOKENS  = 1200
+        private const val TEMPERATURE = 0.72f
+        private const val TOP_K       = 40
     }
+
+    private val downloadManager = ModelDownloadManager(context)
 
     data class GenerateResult(
         val success: Boolean,
@@ -37,21 +38,19 @@ class OfflineGemmaClient(private val context: Context) {
         val tokensGenerated: Int = 0
     )
 
-    /** Returns the expected model file path so the Settings screen can display it. */
-    fun getModelFile(): File =
-        File(context.getExternalFilesDir("models"), MODEL_FILENAME)
+    fun getModelFile(): File = downloadManager.getModelFile()
 
-    /** True only when the model binary exists on disk and is non-empty. */
-    fun isModelReady(): Boolean {
-        val f = getModelFile()
-        val ready = f.exists() && f.length() > 1_000_000L   // >1 MB sanity check
-        Log.d(TAG, "isModelReady=$ready  path=${f.absolutePath}")
-        return ready
-    }
+    /** True only when the model binary is fully downloaded and ready. */
+    fun isModelReady(): Boolean = downloadManager.isModelReady()
+
+    /** Expose download manager so UI can call downloadModel() directly. */
+    fun getDownloadManager(): ModelDownloadManager = downloadManager
 
     /**
-     * Run inference with the on-device model.
-     * Wrapped in IO dispatcher — safe to call from any coroutine.
+     * Run inference on the Devil AI 2B model.
+     * @param prompt       Full formatted prompt
+     * @param maxTokens    Max output tokens
+     * @param onToken      Optional streaming callback (token by token)
      */
     suspend fun generate(
         prompt: String,
@@ -62,47 +61,41 @@ class OfflineGemmaClient(private val context: Context) {
         if (!isModelReady()) {
             return@withContext GenerateResult(
                 success = false,
-                error   = "Offline model not found at ${getModelFile().absolutePath}. " +
-                          "Go to Settings \u2192 Download AI Model."
+                error   = "${MODEL_DISPLAY_NAME} model not downloaded. " +
+                          "Downloading now in background…"
             )
         }
 
+        Log.i(TAG, "Starting inference | model=${getModelFile().name} | maxTokens=$maxTokens")
+
         return@withContext try {
             runMediaPipeInference(prompt, maxTokens, onToken)
+        } catch (classMissing: ClassNotFoundException) {
+            Log.e(TAG, "MediaPipe not in classpath: ${classMissing.message}")
+            GenerateResult(
+                success = false,
+                error   = "MediaPipe tasks-genai not found. Add to build.gradle: " +
+                          "implementation 'com.google.mediapipe:tasks-genai:0.10.14'"
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "MediaPipe inference failed: ${e.message}", e)
-            // Graceful degradation: try pure-Java tokenizer fallback
-            try {
-                runJavaLlmFallback(prompt, maxTokens)
-            } catch (e2: Exception) {
-                GenerateResult(
-                    success = false,
-                    error   = "Offline inference error: ${e2.message}"
-                )
-            }
+            Log.e(TAG, "Inference error: ${e.message}", e)
+            GenerateResult(success = false, error = "Inference error: ${e.message}")
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────────
-    // MediaPipe LLM Inference (primary path)
-    // ──────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
+    // MediaPipe LLM Inference
+    // ──────────────────────────────────────────────────────────────────────
 
     private fun runMediaPipeInference(
         prompt: String,
         maxTokens: Int,
         onToken: ((String) -> Unit)?
     ): GenerateResult {
-        /*
-         * Dynamic class loading so the app compiles even if the mediapipe
-         * tasks-genai dependency is not yet added to build.gradle.
-         * Once you add: implementation 'com.google.mediapipe:tasks-genai:0.10.14'
-         * this will resolve at runtime.
-         */
         val llmClass     = Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
         val optionsClass = Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions")
         val builderClass = Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions\$Builder")
 
-        // Build options
         val builder = builderClass.newInstance()
         builderClass.getMethod("setModelPath", String::class.java)
             .invoke(builder, getModelFile().absolutePath)
@@ -114,73 +107,26 @@ class OfflineGemmaClient(private val context: Context) {
             .invoke(builder, TOP_K)
         val options = builderClass.getMethod("build").invoke(builder)
 
-        // Create inference engine
-        val llm = llmClass.getMethod("createFromOptions", Context::class.java, optionsClass)
+        val llm = llmClass
+            .getMethod("createFromOptions", Context::class.java, optionsClass)
             .invoke(null, context, options)
 
         val sb = StringBuilder()
         try {
-            if (onToken != null) {
-                // Streaming
-                val streamClass = Class.forName(
-                    "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceListener")
-                val proxy = java.lang.reflect.Proxy.newProxyInstance(
-                    streamClass.classLoader,
-                    arrayOf(streamClass)
-                ) { _, method, args ->
-                    if (method.name == "onPartialResult" && args != null && args.isNotEmpty()) {
-                        val token = args[0]?.toString() ?: ""
-                        sb.append(token)
-                        onToken(token)
-                    }
-                    null
-                }
-                llmClass.getMethod("generateResponseAsync", String::class.java, streamClass)
-                    .invoke(llm, prompt, proxy)
-                // Wait for completion via generateResponse synchronously as well
-                // (streaming result already accumulated in sb)
-            } else {
-                // Synchronous
-                val result = llmClass.getMethod("generateResponse", String::class.java)
-                    .invoke(llm, prompt) as? String ?: ""
-                sb.append(result)
-            }
+            val result = llmClass
+                .getMethod("generateResponse", String::class.java)
+                .invoke(llm, prompt) as? String ?: ""
+            sb.append(result)
+            onToken?.invoke(result)
         } finally {
             try { llmClass.getMethod("close").invoke(llm) } catch (_: Exception) {}
         }
 
         val output = sb.toString().trim()
-        return if (output.isNotBlank()) {
-            GenerateResult(success = true, text = output, tokensGenerated = output.split(" ").size)
-        } else {
+        return if (output.isNotBlank())
+            GenerateResult(success = true, text = output,
+                tokensGenerated = output.split(" ").size)
+        else
             GenerateResult(success = false, error = "Model returned empty output")
-        }
-    }
-
-    // ──────────────────────────────────────────────────────────────────────────
-    // Pure-Java LLM fallback (llm.java / llama.cpp via JNI if bundled)
-    // ──────────────────────────────────────────────────────────────────────────
-
-    private fun runJavaLlmFallback(prompt: String, maxTokens: Int): GenerateResult {
-        /*
-         * Attempt to load a llama.cpp JNI wrapper if bundled as a .so in the APK.
-         * This is a best-effort fallback — if the .so isn't present this throws
-         * and the caller catches + returns an error.
-         */
-        System.loadLibrary("llama")
-        val llamaClass = Class.forName("com.nexuzy.publisher.llama.LlamaContext")
-        val ctx = llamaClass
-            .getMethod("create", String::class.java, Int::class.java, Int::class.java)
-            .invoke(null, getModelFile().absolutePath, maxTokens, 4 /* threads */)
-        val output = llamaClass
-            .getMethod("completion", String::class.java)
-            .invoke(ctx, prompt) as? String ?: ""
-        try { llamaClass.getMethod("free").invoke(ctx) } catch (_: Exception) {}
-
-        return if (output.isNotBlank()) {
-            GenerateResult(success = true, text = output.trim(), tokensGenerated = output.split(" ").size)
-        } else {
-            GenerateResult(success = false, error = "Llama.cpp fallback returned empty output")
-        }
     }
 }

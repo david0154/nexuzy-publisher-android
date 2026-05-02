@@ -15,25 +15,23 @@ import kotlinx.coroutines.withContext
 
 /**
  * ╔══════════════════════════════════════════════════════════════════════╗
- * ║          NEXUZY AI WRITER — 7-STAGE PIPELINE (v8)                   ║
+ * ║      NEXUZY AI WRITER — 7-STAGE PIPELINE (v9 • Devil AI 2B)         ║
  * ╠══════════════════════════════════════════════════════════════════════╣
- * ║  STAGE 0 │ WEB CONTEXT   │ DuckDuckGo live search for fresh context ║
- * ║  STAGE 1 │ WRITE         │ Gemini → Sarvam → Gemma (offline)        ║
- * ║  STAGE 2 │ FACT-CHECK    │ OpenAI verifies facts + corrects errors   ║
- * ║  STAGE 3 │ HUMANIZE      │ Gemini → OpenAI fallback                 ║
- * ║  STAGE 4 │ GRAMMAR       │ Sarvam grammar + spelling                ║
- * ║  STAGE 5 │ SEO           │ Gemini → Sarvam fallback                 ║
- * ║  STAGE 6 │ TITLE REWRITE │ Gemini → Sarvam → OpenAI fallback        ║
+ * ║  STAGE 0 │ WEB CONTEXT   │ DuckDuckGo live search (no API key)      ║
+ * ║  STAGE 1 │ WRITE         │ 😈 Devil AI 2B (on-device, NO API)       ║
+ * ║  STAGE 2 │ FACT-CHECK    │ OpenAI (optional, verifies facts)         ║
+ * ║  STAGE 3 │ HUMANIZE      │ Gemini → OpenAI fallback (optional)       ║
+ * ║  STAGE 4 │ GRAMMAR       │ Sarvam grammar + spelling (optional)      ║
+ * ║  STAGE 5 │ SEO           │ Gemini → Sarvam fallback (optional)       ║
+ * ║  STAGE 6 │ TITLE REWRITE │ Gemini → Sarvam → OpenAI (optional)      ║
  * ║  STAGE 7 │ IMAGE         │ Watermark check + Google search fallback  ║
  * ╚══════════════════════════════════════════════════════════════════════╝
  *
- * Stage 1 now has a 3-tier fallback:
- *   Tier A — Gemini (online, fastest, best quality)
- *   Tier B — Sarvam (online backup, requires Sarvam API key)
- *   Tier C — Gemma 3n offline (on-device, zero API cost, needs ~2GB model)
- *
- * Output: publish-ready Article with clean human-like content,
- *         SEO-optimised title, meta description, tags, and image.
+ * KEY DESIGN:
+ *   Stage 1 (WRITING) = Devil AI 2B ONLY — 100% offline, zero API cost.
+ *   Stages 2–6 = online APIs used ONLY for fact-check / grammar / SEO.
+ *   If ALL APIs are absent, stages 2–6 are skipped gracefully.
+ *   The pipeline ALWAYS produces an article as long as Devil AI 2B is ready.
  */
 class AiPipeline(private val context: Context) {
 
@@ -46,25 +44,23 @@ class AiPipeline(private val context: Context) {
     private val offlineGemma    = OfflineGemmaClient(context)
     private val offlineWriter   = OfflineArticleWriter(offlineGemma)
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
     // Data classes
-    // ─────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
 
     data class PipelineResult(
         val success: Boolean,
         val article: Article? = null,
         val finalContent: String = "",
         val title: String = "",
-        val geminiDone: Boolean = false,
-        val sarvamUsedAsWriter: Boolean = false,
-        val offlineGemmaUsed: Boolean = false,   // ← NEW: true when Gemma offline wrote the article
+        val writerProvider: String = "devil_ai_2b",  // always devil_ai_2b for Stage 1
         val openAiDone: Boolean = false,
         val sarvamDone: Boolean = false,
         val humanized: Boolean = false,
-        val humanizeProvider: String = "",   // "gemini" | "openai" | "none"
+        val humanizeProvider: String = "",
         val seoDone: Boolean = false,
         val sarvamUsedForSeo: Boolean = false,
-        val titleProvider: String = "",      // "gemini" | "sarvam" | "openai" | "original"
+        val titleProvider: String = "",
         val factCheckPassed: Boolean = false,
         val factCheckFeedback: String = "",
         val grammarIssues: List<String> = emptyList(),
@@ -73,7 +69,6 @@ class AiPipeline(private val context: Context) {
         val stepErrors: List<String> = emptyList()
     )
 
-    /** Lightweight result for bulk RSS credibility display. No Gemini. */
     data class QuickVerifyResult(
         val rssItem: RssItem,
         val credible: Boolean,
@@ -86,19 +81,25 @@ class AiPipeline(private val context: Context) {
 
     enum class Step {
         WEB_SEARCHING,
-        GEMINI_WRITING, SARVAM_WRITING, OFFLINE_WRITING,   // ← OFFLINE_WRITING added
-        OPENAI_CHECKING,
-        HUMANIZING, HUMANIZING_OPENAI_FALLBACK,
-        SARVAM_CHECKING,
-        SEO_GENERATING, SEO_SARVAM_FALLBACK,
-        TITLE_REWRITING, TITLE_SARVAM_FALLBACK, TITLE_OPENAI_FALLBACK,
-        IMAGE_DOWNLOADING, IMAGE_WATERMARK_SEARCH,
+        DEVIL_AI_WRITING,           // Stage 1 — Devil AI 2B (primary, always)
+        MODEL_DOWNLOADING,          // Stage 1 — auto-downloading model if needed
+        OPENAI_CHECKING,            // Stage 2 — optional
+        HUMANIZING,                 // Stage 3 — optional
+        HUMANIZING_OPENAI_FALLBACK, // Stage 3 — optional fallback
+        SARVAM_CHECKING,            // Stage 4 — optional
+        SEO_GENERATING,             // Stage 5 — optional
+        SEO_SARVAM_FALLBACK,        // Stage 5 — optional fallback
+        TITLE_REWRITING,            // Stage 6 — optional
+        TITLE_SARVAM_FALLBACK,      // Stage 6 — optional fallback
+        TITLE_OPENAI_FALLBACK,      // Stage 6 — optional fallback
+        IMAGE_DOWNLOADING,          // Stage 7
+        IMAGE_WATERMARK_SEARCH,     // Stage 7
         COMPLETE, ERROR
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // MODE A: Quick OpenAI verify (bulk news list, zero Gemini calls)
-    // ─────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
+    // MODE A: Quick OpenAI verify (bulk news list)
+    // ──────────────────────────────────────────────────────────────────────
 
     suspend fun verifyOnlyWithOpenAi(rssItem: RssItem): QuickVerifyResult =
         withContext(Dispatchers.IO) {
@@ -133,9 +134,9 @@ class AiPipeline(private val context: Context) {
             )
         }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // MODE B: Full 7-stage Nexuzy AI Writer pipeline
-    // ─────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
+    // MODE B: Full 7-stage pipeline
+    // ──────────────────────────────────────────────────────────────────────
 
     suspend fun processRssItem(
         rssItem: RssItem,
@@ -145,17 +146,15 @@ class AiPipeline(private val context: Context) {
         onProgress: ((PipelineProgress) -> Unit)? = null
     ): PipelineResult = withContext(Dispatchers.IO) {
 
-        val stepErrors       = mutableListOf<String>()
-        var sarvamWriter     = false
-        var offlineGemmaUsed = false
-        var sarvamSeo        = false
-        var humanized        = false
+        val stepErrors   = mutableListOf<String>()
+        var humanized    = false
         var humanizeProvider = "none"
         var titleProvider    = "original"
+        var sarvamSeo        = false
 
-        // ════════════════════════════════════════════════════════════════════
-        // STAGE 0 — DuckDuckGo web context (free, no API key needed)
-        // ════════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════
+        // STAGE 0 — DuckDuckGo web context (free, no API key)
+        // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.WEB_SEARCHING,
             "🌐 Stage 0/7 — Fetching live web context…"))
         var liveWebContext = ""
@@ -166,7 +165,6 @@ class AiPipeline(private val context: Context) {
             )
             if (ddg.success && ddg.summary.isNotBlank()) {
                 liveWebContext = ddg.summary
-                Log.i("AiPipeline", "[S0] DDG context: ${liveWebContext.length} chars")
             } else {
                 stepErrors.add("[S0-DDG] ${ddg.error}")
             }
@@ -174,139 +172,106 @@ class AiPipeline(private val context: Context) {
             stepErrors.add("[S0-DDG-ex] ${e.message}")
         }
 
-        // ════════════════════════════════════════════════════════════════════
-        // STAGE 1 — Write: Gemini → Sarvam → Gemma offline
-        // ════════════════════════════════════════════════════════════════════
-        onProgress?.invoke(PipelineProgress(Step.GEMINI_WRITING,
-            "✍️ Stage 1/7 — Gemini writing article…"))
+        // ════════════════════════════════════════════════════════════════
+        // STAGE 1 — 😈 Devil AI 2B writes the article (PRIMARY, offline)
+        // ════════════════════════════════════════════════════════════════
+        onProgress?.invoke(PipelineProgress(Step.DEVIL_AI_WRITING,
+            "😈 Stage 1/7 — Devil AI 2B writing article offline…"))
 
-        val geminiWrite = gemini.writeNewsArticle(
-            rssTitle       = rssItem.title,
-            rssDescription = rssItem.description,
-            rssFullContent = rssItem.fullContent,
-            rssPubDate     = rssItem.pubDate,
-            rssSourceUrl   = rssItem.link,
-            liveWebContext = liveWebContext,
-            category       = rssItem.feedCategory,
-            model          = model,
-            maxWords       = maxWords
-        )
-
-        var currentContent: String
-
-        if (geminiWrite.success && geminiWrite.content.isNotBlank()) {
-            // ── Tier A: Gemini succeeded ──────────────────────────────────
-            currentContent = geminiWrite.content
-            Log.i("AiPipeline", "[S1] Gemini wrote ${currentContent.length} chars (${geminiWrite.modelUsed})")
-
-        } else {
-            // ── Tier B: Sarvam backup ─────────────────────────────────────
-            stepErrors.add("[S1-Gemini] ${geminiWrite.error}")
-            onProgress?.invoke(PipelineProgress(Step.SARVAM_WRITING,
-                "⚠️ Stage 1/7 — Gemini quota hit. Sarvam AI writing…"))
-
-            val sarvamWrite = sarvam.writeArticle(
-                rssTitle       = rssItem.title,
-                rssDescription = rssItem.description,
-                rssFullContent = rssItem.fullContent,
-                category       = rssItem.feedCategory,
-                maxWords       = maxWords
-            )
-
-            if (sarvamWrite.success && sarvamWrite.content.isNotBlank()) {
-                currentContent = sarvamWrite.content
-                sarvamWriter   = true
-                Log.i("AiPipeline", "[S1] Sarvam backup wrote ${currentContent.length} chars")
-
-            } else {
-                // ── Tier C: Gemma offline fallback ────────────────────────
-                stepErrors.add("[S1-Sarvam] ${sarvamWrite.error}")
-
-                if (!offlineGemma.isModelReady()) {
-                    return@withContext PipelineResult(
-                        success    = false,
-                        title      = rssItem.title,
-                        error      = "Stage 1 FAIL — Gemini: ${geminiWrite.error} | " +
-                                     "Sarvam: ${sarvamWrite.error} | " +
-                                     "Offline model not downloaded. Go to Settings → Download AI Model.",
-                        stepErrors = stepErrors
-                    )
-                }
-
-                onProgress?.invoke(PipelineProgress(Step.OFFLINE_WRITING,
-                    "📱 Stage 1/7 — All APIs unavailable. Using offline Gemma AI…"))
-
-                val offlineWrite = offlineWriter.write(
-                    title       = rssItem.title,
-                    description = rssItem.description,
-                    category    = rssItem.feedCategory,
-                    targetWords = maxWords,
-                    onProgress  = { step, msg ->
-                        onProgress?.invoke(PipelineProgress(Step.OFFLINE_WRITING, msg))
-                    }
+        // Auto-download model if not present
+        if (!offlineGemma.isModelReady()) {
+            onProgress?.invoke(PipelineProgress(Step.MODEL_DOWNLOADING,
+                "📥 Downloading Devil AI 2B model… this happens only once (~1.5 GB)"))
+            val downloaded = offlineGemma.getDownloadManager().downloadModel { progress ->
+                val pct  = progress.percent
+                val mbDone = progress.bytesDownloaded / 1_048_576
+                val mbTotal = progress.totalBytes / 1_048_576
+                onProgress?.invoke(PipelineProgress(Step.MODEL_DOWNLOADING,
+                    "📥 Devil AI 2B: $pct% ($mbDone MB / $mbTotal MB)"))
+            }
+            if (!downloaded || !offlineGemma.isModelReady()) {
+                return@withContext PipelineResult(
+                    success = false,
+                    title   = rssItem.title,
+                    error   = "Failed to download Devil AI 2B model. Check internet connection.",
+                    stepErrors = stepErrors
                 )
-
-                if (!offlineWrite.success || offlineWrite.content.isBlank()) {
-                    stepErrors.add("[S1-Offline] ${offlineWrite.error}")
-                    return@withContext PipelineResult(
-                        success    = false,
-                        title      = rssItem.title,
-                        error      = "Stage 1 FAIL — Gemini: ${geminiWrite.error} | " +
-                                     "Sarvam: ${sarvamWrite.error} | " +
-                                     "Offline: ${offlineWrite.error}",
-                        stepErrors = stepErrors
-                    )
-                }
-
-                currentContent   = offlineWrite.content
-                offlineGemmaUsed = true
-                Log.i("AiPipeline", "[S1] Gemma offline wrote ${currentContent.length} chars")
             }
         }
 
-        // ════════════════════════════════════════════════════════════════════
-        // STAGE 2 — Fact-check: OpenAI verifies & corrects
-        // ════════════════════════════════════════════════════════════════════
+        val writeResult = offlineWriter.write(
+            title       = rssItem.title,
+            description = if (liveWebContext.isNotBlank())
+                "$liveWebContext\n\n${rssItem.description}"
+            else
+                rssItem.description,
+            category    = rssItem.feedCategory,
+            targetWords = maxWords,
+            onProgress  = { _, msg ->
+                onProgress?.invoke(PipelineProgress(Step.DEVIL_AI_WRITING, msg))
+            }
+        )
+
+        if (!writeResult.success || writeResult.content.isBlank()) {
+            return@withContext PipelineResult(
+                success    = false,
+                title      = rssItem.title,
+                error      = "Stage 1 (Devil AI 2B) failed: ${writeResult.error}",
+                stepErrors = stepErrors
+            )
+        }
+
+        var currentContent = writeResult.content
+        Log.i("AiPipeline", "[S1] Devil AI 2B wrote ${currentContent.length} chars")
+
+        // ════════════════════════════════════════════════════════════════
+        // STAGE 2 — Fact-check: OpenAI (optional — skipped if no API key)
+        // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.OPENAI_CHECKING,
             "🔍 Stage 2/7 — OpenAI fact-checking…"))
 
-        val factCheck = openAi.factCheckArticle(title = rssItem.title, content = currentContent)
         var factCheckPassed   = false
         var factCheckFeedback = ""
         var rawConfidence     = 0f
+        var openAiDone        = false
 
-        if (factCheck.success) {
-            factCheckPassed   = factCheck.isAccurate
-            factCheckFeedback = factCheck.feedback
-            rawConfidence     = factCheck.confidenceScore
-            if (factCheck.correctedContent.isNotBlank() &&
-                factCheck.correctedContent.length >= currentContent.length / 2) {
-                currentContent = factCheck.correctedContent
-                Log.i("AiPipeline", "[S2] OpenAI corrected content")
+        try {
+            val factCheck = openAi.factCheckArticle(
+                title   = rssItem.title,
+                content = currentContent
+            )
+            if (factCheck.success) {
+                openAiDone        = true
+                factCheckPassed   = factCheck.isAccurate
+                factCheckFeedback = factCheck.feedback
+                rawConfidence     = factCheck.confidenceScore
+                if (factCheck.correctedContent.isNotBlank() &&
+                    factCheck.correctedContent.length >= currentContent.length / 2) {
+                    currentContent = factCheck.correctedContent
+                    Log.i("AiPipeline", "[S2] OpenAI corrected content")
+                }
+            } else {
+                stepErrors.add("[S2-OpenAI] ${factCheck.error} (skipped)")
             }
-        } else {
-            stepErrors.add("[S2-OpenAI] ${factCheck.error}")
-            Log.w("AiPipeline", "[S2] OpenAI unavailable: ${factCheck.error}")
+        } catch (e: Exception) {
+            stepErrors.add("[S2-OpenAI-ex] ${e.message} (skipped)")
         }
 
         val displayConfidence = when {
-            rawConfidence > 0f   -> rawConfidence
-            factCheck.isAccurate -> 0.65f
-            else                 -> 0.30f
+            rawConfidence > 0f -> rawConfidence
+            openAiDone         -> if (factCheckPassed) 0.65f else 0.30f
+            else               -> 0.50f  // no fact-check available
         }
 
-        // ════════════════════════════════════════════════════════════════════
-        // STAGE 3 — Humanize: Gemini primary → OpenAI fallback
-        // ════════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════
+        // STAGE 3 — Humanize: Gemini → OpenAI fallback (optional)
+        // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.HUMANIZING,
             "🧑 Stage 3/7 — Humanizing (Gemini)…"))
 
         val humanizePrompt = buildHumanizePrompt()
-        var humanizeAttempted = false
-
-        // — Attempt A: Gemini humanizer —
         try {
-            val geminiHumanize = gemini.writeNewsArticle(
+            val r = gemini.writeNewsArticle(
                 rssTitle       = rssItem.title,
                 rssDescription = humanizePrompt,
                 rssFullContent = currentContent,
@@ -314,102 +279,96 @@ class AiPipeline(private val context: Context) {
                 model          = model,
                 maxWords       = maxWords + 50
             )
-            if (geminiHumanize.success && geminiHumanize.content.isNotBlank() &&
-                geminiHumanize.content.length >= currentContent.length / 2) {
-                currentContent   = geminiHumanize.content
+            if (r.success && r.content.isNotBlank() &&
+                r.content.length >= currentContent.length / 2) {
+                currentContent   = r.content
                 humanized        = true
                 humanizeProvider = "gemini"
-                humanizeAttempted = true
-                Log.i("AiPipeline", "[S3] Gemini humanized: ${currentContent.length} chars")
             } else {
-                stepErrors.add("[S3-Gemini-Humanize] ${geminiHumanize.error.ifBlank { "Empty" }}")
-                Log.w("AiPipeline", "[S3] Gemini humanize failed: ${geminiHumanize.error}")
+                stepErrors.add("[S3-Gemini] ${r.error.ifBlank { "Empty" }} (skipped)")
             }
         } catch (e: Exception) {
-            stepErrors.add("[S3-Gemini-Humanize-ex] ${e.message}")
-            Log.w("AiPipeline", "[S3] Gemini humanize exception: ${e.message}")
+            stepErrors.add("[S3-Gemini-ex] ${e.message}")
         }
 
-        // — Attempt B: OpenAI fallback humanizer —
-        if (!humanizeAttempted) {
+        if (!humanized) {
             onProgress?.invoke(PipelineProgress(Step.HUMANIZING_OPENAI_FALLBACK,
-                "⚠️ Stage 3/7 — Gemini unavailable. OpenAI humanizing…"))
+                "⚠️ Stage 3/7 — OpenAI humanizing fallback…"))
             try {
-                val openAiHumanize = openAi.humanizeArticle(
+                val r = openAi.humanizeArticle(
                     title   = rssItem.title,
                     content = currentContent
                 )
-                if (openAiHumanize.success && openAiHumanize.humanizedContent.isNotBlank() &&
-                    openAiHumanize.humanizedContent.length >= currentContent.length / 2) {
-                    currentContent   = openAiHumanize.humanizedContent
+                if (r.success && r.humanizedContent.isNotBlank() &&
+                    r.humanizedContent.length >= currentContent.length / 2) {
+                    currentContent   = r.humanizedContent
                     humanized        = true
                     humanizeProvider = "openai"
-                    Log.i("AiPipeline", "[S3] OpenAI fallback humanized: ${currentContent.length} chars")
                 } else {
-                    stepErrors.add("[S3-OpenAI-Humanize] ${openAiHumanize.error.ifBlank { "Empty" }}")
-                    Log.w("AiPipeline", "[S3] OpenAI humanize also failed: ${openAiHumanize.error}")
+                    stepErrors.add("[S3-OpenAI] ${r.error.ifBlank { "Empty" }} (skipped)")
                 }
             } catch (e: Exception) {
-                stepErrors.add("[S3-OpenAI-Humanize-ex] ${e.message}")
-                Log.w("AiPipeline", "[S3] OpenAI humanize exception: ${e.message}")
+                stepErrors.add("[S3-OpenAI-ex] ${e.message}")
             }
         }
 
-        // ════════════════════════════════════════════════════════════════════
-        // STAGE 4 — Grammar: Sarvam spelling + grammar correction
-        // ════════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════
+        // STAGE 4 — Grammar: Sarvam (optional)
+        // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.SARVAM_CHECKING,
             "✏️ Stage 4/7 — Sarvam grammar check…"))
-
-        val grammar = sarvam.checkGrammarAndSpelling(currentContent)
-        if (grammar.success && grammar.correctedText.isNotBlank()) {
-            currentContent = grammar.correctedText
-            Log.i("AiPipeline", "[S4] Grammar: ${grammar.issuesFound.size} issues fixed")
-        } else if (!grammar.success) {
-            stepErrors.add("[S4-Sarvam] ${grammar.error}")
+        var grammarIssues = emptyList<String>()
+        var sarvamDone    = false
+        try {
+            val grammar = sarvam.checkGrammarAndSpelling(currentContent)
+            if (grammar.success && grammar.correctedText.isNotBlank()) {
+                currentContent = grammar.correctedText
+                grammarIssues  = grammar.issuesFound
+                sarvamDone     = true
+            } else {
+                stepErrors.add("[S4-Sarvam] ${grammar.error} (skipped)")
+            }
+        } catch (e: Exception) {
+            stepErrors.add("[S4-Sarvam-ex] ${e.message}")
         }
 
-        // ════════════════════════════════════════════════════════════════════
-        // STAGE 5 — SEO: Gemini → Sarvam fallback
-        // ════════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════
+        // STAGE 5 — SEO: Gemini → Sarvam fallback (optional)
+        // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.SEO_GENERATING,
             "🔎 Stage 5/7 — Generating SEO metadata…"))
-
         var seoResult = gemini.generateSeoData(
             title          = rssItem.title,
             articleContent = currentContent,
             category       = rssItem.feedCategory,
             model          = model
         )
-
         if (!seoResult.success) {
             stepErrors.add("[S5-Gemini-SEO] ${seoResult.error}")
             onProgress?.invoke(PipelineProgress(Step.SEO_SARVAM_FALLBACK,
                 "⚠️ Stage 5/7 — Sarvam SEO fallback…"))
-            seoResult = sarvam.generateSeoData(
-                title          = rssItem.title,
-                articleContent = currentContent,
-                category       = rssItem.feedCategory
-            )
-            if (seoResult.success) {
-                sarvamSeo = true
-                Log.i("AiPipeline", "[S5] Sarvam SEO fallback OK")
-            } else {
-                stepErrors.add("[S5-Sarvam-SEO] ${seoResult.error}")
+            try {
+                seoResult = sarvam.generateSeoData(
+                    title          = rssItem.title,
+                    articleContent = currentContent,
+                    category       = rssItem.feedCategory
+                )
+                if (seoResult.success) sarvamSeo = true
+                else stepErrors.add("[S5-Sarvam-SEO] ${seoResult.error} (skipped)")
+            } catch (e: Exception) {
+                stepErrors.add("[S5-Sarvam-SEO-ex] ${e.message}")
             }
         }
-
         val tags            = if (seoResult.success) seoResult.tags.joinToString(", ") else ""
         val metaKeywords    = if (seoResult.success) seoResult.metaKeywords else ""
         val focusKeyphrase  = if (seoResult.success) seoResult.focusKeyphrase else ""
         val metaDescription = if (seoResult.success) seoResult.metaDescription else ""
 
-        // ════════════════════════════════════════════════════════════════════
-        // STAGE 6 — Title Rewrite: Gemini → Sarvam → OpenAI → original
-        // ════════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════
+        // STAGE 6 — Title Rewrite: Gemini → Sarvam → OpenAI (optional)
+        // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.TITLE_REWRITING,
-            "📝 Stage 6/7 — Rewriting headline (Gemini)…"))
-
+            "📝 Stage 6/7 — Rewriting headline…"))
         val finalTitle = rewriteTitle(
             originalTitle  = rssItem.title,
             articleContent = currentContent,
@@ -422,15 +381,13 @@ class AiPipeline(private val context: Context) {
             },
             onProviderUsed = { provider -> titleProvider = provider }
         )
-        Log.i("AiPipeline", "[S6] Final title ($titleProvider): $finalTitle")
 
-        // ════════════════════════════════════════════════════════════════════
-        // STAGE 7 — Image: download + watermark check + search fallback
-        // ════════════════════════════════════════════════════════════════════
+        // ════════════════════════════════════════════════════════════════
+        // STAGE 7 — Image download
+        // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.IMAGE_DOWNLOADING,
             "🖼️ Stage 7/7 — Downloading article image…"))
         var localImagePath = rssItem.localImagePath
-
         if (localImagePath.isBlank() && rssItem.imageUrl.isNotBlank()) {
             if (keyManager.getGoogleSearchApiKey().isNotBlank() &&
                 keyManager.getGoogleSearchCseId().isNotBlank()) {
@@ -445,17 +402,12 @@ class AiPipeline(private val context: Context) {
             )
         }
 
-        onProgress?.invoke(PipelineProgress(Step.COMPLETE, "✅ Nexuzy AI Writer complete!"))
+        onProgress?.invoke(PipelineProgress(Step.COMPLETE,
+            "✅ Nexuzy AI Writer complete! (😈 Devil AI 2B)"))
 
-        // ════════════════════════════════════════════════════════════════════
-        // BUILD FINAL ARTICLE
-        // ════════════════════════════════════════════════════════════════════
-        val aiProvider = when {
-            offlineGemmaUsed -> "gemma-offline"
-            sarvamWriter     -> "sarvam"
-            else             -> "gemini"
-        }
-
+        // ════════════════════════════════════════════════════════════════
+        // Build final Article
+        // ════════════════════════════════════════════════════════════════
         val article = Article(
             title             = finalTitle,
             content           = currentContent,
@@ -471,41 +423,39 @@ class AiPipeline(private val context: Context) {
             imagePath         = localImagePath,
             status            = "draft",
             wordpressSiteId   = wordpressSiteId,
-            geminiChecked     = !sarvamWriter && !offlineGemmaUsed,
-            openaiChecked     = factCheck.success,
-            sarvamChecked     = grammar.success,
+            geminiChecked     = false,           // Gemini NOT used for writing
+            openaiChecked     = openAiDone,
+            sarvamChecked     = sarvamDone,
             factCheckPassed   = factCheckPassed,
             factCheckFeedback = factCheckFeedback,
             confidenceScore   = displayConfidence,
-            aiProvider        = aiProvider
+            aiProvider        = "devil_ai_2b"     // branding
         )
 
         PipelineResult(
-            success            = true,
-            article            = article,
-            finalContent       = currentContent,
-            title              = finalTitle,
-            geminiDone         = !sarvamWriter && !offlineGemmaUsed,
-            sarvamUsedAsWriter = sarvamWriter,
-            offlineGemmaUsed   = offlineGemmaUsed,
-            sarvamUsedForSeo   = sarvamSeo,
-            openAiDone         = factCheck.success,
-            sarvamDone         = grammar.success,
-            humanized          = humanized,
-            humanizeProvider   = humanizeProvider,
-            seoDone            = seoResult.success,
-            titleProvider      = titleProvider,
-            factCheckPassed    = factCheckPassed,
-            factCheckFeedback  = factCheckFeedback,
-            grammarIssues      = grammar.issuesFound,
-            confidenceScore    = displayConfidence,
-            stepErrors         = stepErrors
+            success           = true,
+            article           = article,
+            finalContent      = currentContent,
+            title             = finalTitle,
+            writerProvider    = "devil_ai_2b",
+            openAiDone        = openAiDone,
+            sarvamDone        = sarvamDone,
+            humanized         = humanized,
+            humanizeProvider  = humanizeProvider,
+            seoDone           = seoResult.success,
+            sarvamUsedForSeo  = sarvamSeo,
+            titleProvider     = titleProvider,
+            factCheckPassed   = factCheckPassed,
+            factCheckFeedback = factCheckFeedback,
+            grammarIssues     = grammarIssues,
+            confidenceScore   = displayConfidence,
+            stepErrors        = stepErrors
         )
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
     // Private helpers
-    // ─────────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────
 
     private fun buildHumanizePrompt(): String = """
         HUMANIZATION TASK — STRICT RULES:
@@ -513,23 +463,21 @@ class AiPipeline(private val context: Context) {
         • Do NOT add new information or remove key details.
         • Rewrite ONLY the style and tone to sound like a human journalist.
 
-        Remove ALL of the following AI filler phrases wherever they appear:
+        Remove ALL of the following AI filler phrases:
         "notably", "in conclusion", "this underscores", "pivotal", "landscape",
         "delve", "shed light on", "it's worth noting", "it is important to note",
         "this highlights", "in summary", "furthermore", "moreover", "nevertheless",
         "in today's fast-paced world", "game-changer", "paradigm shift",
-        "To be honest", "Arguably", "If you think about it", "For most people",
-        "As an AI", "I cannot", "Certainly!", "Absolutely!", "Of course!"
+        "To be honest", "Arguably", "As an AI", "I cannot", "Certainly!", "Absolutely!"
 
         Style rules:
         - Vary sentence length: short punchy sentences mixed with longer ones
-        - Use natural contractions: "it's", "don't", "isn't", "they're", "we've"
-        - Active voice preferred over passive
+        - Natural contractions: "it's", "don't", "isn't", "they're", "we've"
+        - Active voice preferred
         - Keep the same paragraph structure and order
         - Keep the same headline
 
-        Output: ONLY the rewritten article. No preamble. No explanation.
-        Start directly with the headline on the first line.
+        Output: ONLY the rewritten article. No preamble. Start with headline.
     """.trimIndent()
 
     private suspend fun rewriteTitle(
@@ -541,15 +489,9 @@ class AiPipeline(private val context: Context) {
         onFallback: (Step, String) -> Unit,
         onProviderUsed: (String) -> Unit
     ): String {
+        val titlePrompt = buildTitlePrompt(originalTitle, articleContent, focusKeyphrase, category)
 
-        val titlePrompt = buildTitlePrompt(
-            originalTitle  = originalTitle,
-            articleContent = articleContent,
-            focusKeyphrase = focusKeyphrase,
-            category       = category
-        )
-
-        // ── Provider 1: Gemini ────────────────────────────────────────────
+        // Provider 1: Gemini
         try {
             val r = gemini.writeNewsArticle(
                 rssTitle       = originalTitle,
@@ -559,34 +501,25 @@ class AiPipeline(private val context: Context) {
                 model          = model,
                 maxWords       = 20
             )
-            val headline = extractHeadline(r.content)
-            if (r.success && headline != null) {
-                onProviderUsed("gemini")
-                return headline
-            }
+            val h = extractHeadline(r.content)
+            if (r.success && h != null) { onProviderUsed("gemini"); return h }
             onFallback(Step.TITLE_SARVAM_FALLBACK,
-                "[S6-Gemini-Title] ${r.error.ifBlank { "Empty" }} — trying Sarvam…")
+                "[S6-Gemini-Title] ${r.error.ifBlank{"Empty"}} — trying Sarvam…")
         } catch (e: Exception) {
             onFallback(Step.TITLE_SARVAM_FALLBACK,
                 "[S6-Gemini-Title-ex] ${e.message} — trying Sarvam…")
         }
 
-        // ── Provider 2: Sarvam ────────────────────────────────────────────
+        // Provider 2: Sarvam
         try {
             val r = sarvam.generateSeoData(
                 title          = originalTitle,
                 articleContent = articleContent.take(800),
                 category       = category
             )
-            val headline = if (r.success && r.focusKeyphrase.isNotBlank())
-                buildSarvamTitleFallback(r.focusKeyphrase, category)
-            else null
-
-            if (headline != null) {
-                onProviderUsed("sarvam")
-                Log.i("AiPipeline", "[S6] Sarvam title fallback: $headline")
-                return headline
-            }
+            val h = if (r.success && r.focusKeyphrase.isNotBlank())
+                buildSarvamTitleFallback(r.focusKeyphrase) else null
+            if (h != null) { onProviderUsed("sarvam"); return h }
             onFallback(Step.TITLE_OPENAI_FALLBACK,
                 "[S6-Sarvam-Title] No usable title — trying OpenAI…")
         } catch (e: Exception) {
@@ -594,7 +527,7 @@ class AiPipeline(private val context: Context) {
                 "[S6-Sarvam-Title-ex] ${e.message} — trying OpenAI…")
         }
 
-        // ── Provider 3: OpenAI ────────────────────────────────────────────
+        // Provider 3: OpenAI
         try {
             val r = openAi.rewriteTitle(
                 originalTitle  = originalTitle,
@@ -602,22 +535,16 @@ class AiPipeline(private val context: Context) {
                 focusKeyphrase = focusKeyphrase,
                 category       = category
             )
-            val headline = if (r.success) extractHeadline(r.title) else null
-            if (headline != null) {
-                onProviderUsed("openai")
-                Log.i("AiPipeline", "[S6] OpenAI title fallback: $headline")
-                return headline
-            }
+            val h = if (r.success) extractHeadline(r.title) else null
+            if (h != null) { onProviderUsed("openai"); return h }
             onFallback(Step.TITLE_REWRITING,
-                "[S6-OpenAI-Title] ${r.error.ifBlank { "Empty" }} — using original")
+                "[S6-OpenAI-Title] ${r.error.ifBlank{"Empty"}} — using original")
         } catch (e: Exception) {
             onFallback(Step.TITLE_REWRITING,
                 "[S6-OpenAI-Title-ex] ${e.message} — using original")
         }
 
-        // ── Final fallback: original title ────────────────────────────────
         onProviderUsed("original")
-        Log.w("AiPipeline", "[S6] All title providers failed — keeping original: $originalTitle")
         return originalTitle
     }
 
@@ -626,27 +553,19 @@ class AiPipeline(private val context: Context) {
         articleContent: String,
         focusKeyphrase: String,
         category: String
-    ): String = """
+    ) = """
         Write ONE publish-ready news headline.
         Focus keyphrase : $focusKeyphrase
         Category        : $category
         Original title  : $originalTitle
         Article preview : ${articleContent.take(300)}
-
-        Headline rules:
-        - Under 70 characters
-        - Factual, specific, direct — no clickbait
-        - No "How", "Why", "Everything you need to know", "Ultimate guide"
-        - No AI filler words
-        - Include the focus keyphrase or a close variant if it fits naturally
-        - No colons unless truly necessary
-
-        Output ONLY the headline text. No quotes. No punctuation at end.
+        Rules: under 70 chars, factual, no clickbait, no AI filler.
+        Output ONLY the headline. No quotes. No punctuation at end.
     """.trimIndent()
 
-    private fun buildSarvamTitleFallback(focusKeyphrase: String, category: String): String? {
-        val cleaned = focusKeyphrase.trim().replaceFirstChar { it.uppercaseChar() }
-        return if (cleaned.length in 15..80) cleaned else null
+    private fun buildSarvamTitleFallback(focusKeyphrase: String): String? {
+        val c = focusKeyphrase.trim().replaceFirstChar { it.uppercaseChar() }
+        return if (c.length in 15..80) c else null
     }
 
     private fun extractHeadline(raw: String): String? {
