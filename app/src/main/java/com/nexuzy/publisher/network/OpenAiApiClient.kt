@@ -3,6 +3,8 @@ package com.nexuzy.publisher.network
 import android.util.Log
 import com.google.gson.JsonParser
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,8 +22,8 @@ import java.util.concurrent.TimeUnit
  * METHODS:
  *   factCheckArticle()  — Key 1 → Key 3 fallback
  *   cleanArticleOutput() — Key 2 only (legacy clean step)
- *   humanizeArticle()   — Key 2 → Key 1 fallback  [NEW — Stage 3 fallback]
- *   rewriteTitle()      — Key 2 → Key 1 fallback  [NEW — Stage 6 fallback]
+ *   humanizeArticle()   — Key 2 → Key 1 fallback  [Stage 3 fallback]
+ *   rewriteTitle()      — Key 2 → Key 1 fallback  [Stage 6 fallback]
  */
 class OpenAiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -75,13 +77,13 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
         title: String,
         content: String,
         model: String = "gpt-4o-mini"
-    ): FactCheckResult {
+    ): FactCheckResult = withContext(Dispatchers.IO) {
         val keysToTry = listOf(1, 3)
             .map { idx -> Pair(idx, keyManager.getOpenAiKey(idx)) }
             .filter { (_, key) -> key.isNotBlank() }
 
         if (keysToTry.isEmpty()) {
-            return FactCheckResult(
+            return@withContext FactCheckResult(
                 false, false, "",
                 error = "No OpenAI API keys for fact-checking. Set Key 1 or Key 3 in Settings."
             )
@@ -94,16 +96,16 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
             val result = callOpenAiApi(key, model, prompt)
             if (result.success) {
                 Log.i("OpenAiClient", "[FACT-CHECK] ✔ Key $keyIndex succeeded")
-                return result.copy(keyUsed = keyIndex)
+                return@withContext result.copy(keyUsed = keyIndex)
             }
             if (isQuotaError(result.error)) {
                 Log.w("OpenAiClient", "[FACT-CHECK] Key $keyIndex quota exceeded, trying next")
                 keyManager.rotateOpenAiKey()
                 continue
             }
-            return result.copy(keyUsed = keyIndex)
+            return@withContext result.copy(keyUsed = keyIndex)
         }
-        return FactCheckResult(
+        FactCheckResult(
             false, false, "",
             error = "Both fact-check keys (Key 1 & Key 3) are exhausted."
         )
@@ -117,16 +119,16 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
         title: String,
         content: String,
         model: String = "gpt-4o-mini"
-    ): CleanOutputResult {
+    ): CleanOutputResult = withContext(Dispatchers.IO) {
         val key2 = keyManager.getOpenAiKey(2)
         if (key2.isBlank()) {
             Log.w("OpenAiClient", "[CLEAN] Key 2 not set — skipping clean step")
-            return CleanOutputResult(true, content, error = "Key 2 not configured; clean step skipped")
+            return@withContext CleanOutputResult(true, content, error = "Key 2 not configured; clean step skipped")
         }
 
         Log.d("OpenAiClient", "[CLEAN] Running article clean+humanise with Key 2")
         val prompt = buildCleanPrompt(title, content)
-        return try {
+        try {
             val request = Request.Builder()
                 .url(baseUrl)
                 .addHeader("Authorization", "Bearer $key2")
@@ -164,13 +166,13 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
         title: String,
         content: String,
         model: String = "gpt-4o-mini"
-    ): HumanizeResult {
+    ): HumanizeResult = withContext(Dispatchers.IO) {
         val keysToTry = listOf(2, 1)
             .map { idx -> Pair(idx, keyManager.getOpenAiKey(idx)) }
             .filter { (_, key) -> key.isNotBlank() }
 
         if (keysToTry.isEmpty()) {
-            return HumanizeResult(
+            return@withContext HumanizeResult(
                 false, content,
                 error = "No OpenAI keys available for humanize. Set Key 2 or Key 1 in Settings."
             )
@@ -180,7 +182,7 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
 
         for ((keyIndex, key) in keysToTry) {
             Log.d("OpenAiClient", "[HUMANIZE] Trying Key $keyIndex")
-            return try {
+            try {
                 val request = Request.Builder()
                     .url(baseUrl)
                     .addHeader("Authorization", "Bearer $key")
@@ -193,26 +195,25 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
                     val humanized = extractMessageContent(body)
                     if (humanized.isNotBlank() && humanized.length >= content.length / 2) {
                         Log.i("OpenAiClient", "[HUMANIZE] ✔ Key $keyIndex succeeded")
-                        HumanizeResult(true, humanized)
+                        return@withContext HumanizeResult(true, humanized)
                     } else {
                         Log.w("OpenAiClient", "[HUMANIZE] Key $keyIndex returned too-short response")
-                        HumanizeResult(false, content, error = "Response too short from Key $keyIndex")
+                        return@withContext HumanizeResult(false, content, error = "Response too short from Key $keyIndex")
                     }
                 } else {
-                    val errMsg = "HTTP ${response.code} from Key $keyIndex"
                     if (isQuotaError(body)) {
                         Log.w("OpenAiClient", "[HUMANIZE] Key $keyIndex quota — trying next")
                         keyManager.rotateOpenAiKey()
                         continue
                     }
-                    HumanizeResult(false, content, error = errMsg)
+                    return@withContext HumanizeResult(false, content, error = "HTTP ${response.code} from Key $keyIndex")
                 }
             } catch (e: Exception) {
                 Log.e("OpenAiClient", "[HUMANIZE] Key $keyIndex exception: ${e.message}")
-                HumanizeResult(false, content, error = e.message ?: "Network error")
+                return@withContext HumanizeResult(false, content, error = e.message ?: "Network error")
             }
         }
-        return HumanizeResult(false, content, error = "All OpenAI keys exhausted for humanize.")
+        HumanizeResult(false, content, error = "All OpenAI keys exhausted for humanize.")
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -229,13 +230,13 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
         focusKeyphrase: String,
         category: String,
         model: String = "gpt-4o-mini"
-    ): RewriteTitleResult {
+    ): RewriteTitleResult = withContext(Dispatchers.IO) {
         val keysToTry = listOf(2, 1)
             .map { idx -> Pair(idx, keyManager.getOpenAiKey(idx)) }
             .filter { (_, key) -> key.isNotBlank() }
 
         if (keysToTry.isEmpty()) {
-            return RewriteTitleResult(
+            return@withContext RewriteTitleResult(
                 false, originalTitle,
                 error = "No OpenAI keys available for title rewrite."
             )
@@ -261,7 +262,7 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
 
         for ((keyIndex, key) in keysToTry) {
             Log.d("OpenAiClient", "[TITLE] Trying Key $keyIndex")
-            return try {
+            try {
                 val request = Request.Builder()
                     .url(baseUrl)
                     .addHeader("Authorization", "Bearer $key")
@@ -280,9 +281,9 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
                         ?.take(120)
                     if (!headline.isNullOrBlank() && headline.length >= 10) {
                         Log.i("OpenAiClient", "[TITLE] ✔ Key $keyIndex: $headline")
-                        RewriteTitleResult(true, headline)
+                        return@withContext RewriteTitleResult(true, headline)
                     } else {
-                        RewriteTitleResult(false, originalTitle, error = "Headline too short from Key $keyIndex")
+                        return@withContext RewriteTitleResult(false, originalTitle, error = "Headline too short from Key $keyIndex")
                     }
                 } else {
                     if (isQuotaError(body)) {
@@ -290,14 +291,14 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
                         keyManager.rotateOpenAiKey()
                         continue
                     }
-                    RewriteTitleResult(false, originalTitle, error = "HTTP ${response.code} from Key $keyIndex")
+                    return@withContext RewriteTitleResult(false, originalTitle, error = "HTTP ${response.code} from Key $keyIndex")
                 }
             } catch (e: Exception) {
                 Log.e("OpenAiClient", "[TITLE] Key $keyIndex exception: ${e.message}")
-                RewriteTitleResult(false, originalTitle, error = e.message ?: "Network error")
+                return@withContext RewriteTitleResult(false, originalTitle, error = e.message ?: "Network error")
             }
         }
-        return RewriteTitleResult(false, originalTitle, error = "All OpenAI keys exhausted for title rewrite.")
+        RewriteTitleResult(false, originalTitle, error = "All OpenAI keys exhausted for title rewrite.")
     }
 
     // ─────────────────────────────────────────────────────────────────────────
