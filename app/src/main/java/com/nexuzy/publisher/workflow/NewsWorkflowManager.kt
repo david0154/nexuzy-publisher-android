@@ -2,6 +2,9 @@ package com.nexuzy.publisher.workflow
 
 import android.content.Context
 import android.util.Log
+import com.google.firebase.Timestamp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
 import com.nexuzy.publisher.ai.AiPipeline
 import com.nexuzy.publisher.data.db.AppDatabase
 import com.nexuzy.publisher.data.model.RssItem
@@ -34,6 +37,12 @@ import java.text.SimpleDateFormat
  *
  * Gemini is NEVER called automatically in the background.
  * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * FIRESTORE SAVE:
+ *   After a successful article pipeline, the article is saved to:
+ *     Firestore → articles/{auto-id}   (keyed per authenticated user)
+ *   Only saved if the user is signed in via Firebase Auth.
+ *   Failures are non-fatal — article is always saved to local Room DB first.
  */
 class NewsWorkflowManager(private val context: Context) {
 
@@ -42,6 +51,8 @@ class NewsWorkflowManager(private val context: Context) {
     private val aiPipeline = AiPipeline(context)
     private val wpClient   = WordPressApiClient()
     private val keyManager = ApiKeyManager(context)
+    private val firestore  = FirebaseFirestore.getInstance()
+    private val auth       = FirebaseAuth.getInstance()
 
     // ─── Data classes ─────────────────────────────────────────────────────────
 
@@ -69,6 +80,7 @@ class NewsWorkflowManager(private val context: Context) {
         val processedCount: Int     = 0,
         val savedDraftCount: Int    = 0,
         val pushedDraftCount: Int   = 0,
+        val firestoreId: String     = "",
         val failures: List<String>  = emptyList(),
         val snapshot: DailyNewsSnapshot = DailyNewsSnapshot()
     )
@@ -136,6 +148,11 @@ class NewsWorkflowManager(private val context: Context) {
      * Full AI pipeline for ONE user-selected article.
      * This is the ONLY function that calls Gemini.
      * Called from AiWriterFragment when user taps "Write Article".
+     *
+     * After success:
+     *   1. Saved to local Room DB
+     *   2. Saved to Firestore → articles/{auto-id}  (if signed in)
+     *   3. Pushed to WordPress as draft (if active site configured)
      */
     suspend fun processAndPushSingleItem(item: RssItem): WorkflowResult =
         withContext(Dispatchers.IO) {
@@ -164,9 +181,65 @@ class NewsWorkflowManager(private val context: Context) {
                 )
             }
 
+            // ── Step A: Save to local Room DB (always, regardless of Firestore/WP) ──
             val localId = db.articleDao().insert(pipelineResult.article)
-            var pushed  = 0
+            Log.i("NewsWorkflow", "Article saved to Room DB: localId=$localId")
 
+            // ── Step B: Save to Firestore (non-fatal if user not signed in or error) ──
+            var firestoreDocId = ""
+            val currentUser = auth.currentUser
+            if (currentUser != null) {
+                try {
+                    val articleMap = hashMapOf(
+                        "uid"             to currentUser.uid,
+                        "title"           to pipelineResult.article.title,
+                        "content"         to pipelineResult.article.content,
+                        "summary"         to pipelineResult.article.summary,
+                        "category"        to pipelineResult.article.category,
+                        "tags"            to pipelineResult.article.tags,
+                        "metaKeywords"    to pipelineResult.article.metaKeywords,
+                        "focusKeyphrase"  to pipelineResult.article.focusKeyphrase,
+                        "metaDescription" to pipelineResult.article.metaDescription,
+                        "sourceUrl"       to pipelineResult.article.sourceUrl,
+                        "sourceName"      to pipelineResult.article.sourceName,
+                        "imageUrl"        to pipelineResult.article.imageUrl,
+                        "status"          to "draft",
+                        "aiProvider"      to pipelineResult.article.aiProvider,
+                        "geminiChecked"   to pipelineResult.article.geminiChecked,
+                        "openaiChecked"   to pipelineResult.article.openaiChecked,
+                        "sarvamChecked"   to pipelineResult.article.sarvamChecked,
+                        "factCheckPassed" to pipelineResult.article.factCheckPassed,
+                        "factCheckFeedback" to pipelineResult.article.factCheckFeedback,
+                        "confidenceScore" to pipelineResult.article.confidenceScore,
+                        "localRoomId"     to localId,
+                        "createdAt"       to Timestamp.now()
+                    )
+
+                    // Sync under users/{uid}/articles/{auto-id} to match Firestore rules
+                    val docRef = firestore
+                        .collection("users")
+                        .document(currentUser.uid)
+                        .collection("articles")
+                        .add(articleMap)
+                        .addOnSuccessListener { ref ->
+                            firestoreDocId = ref.id
+                            Log.i("NewsWorkflow", "✅ Article saved to Firestore: ${ref.id}")
+                        }
+                        .addOnFailureListener { e ->
+                            Log.e("NewsWorkflow", "Firestore article save failed: ${e.message}")
+                            failures.add("Firestore save failed: ${e.message}")
+                        }
+
+                } catch (e: Exception) {
+                    Log.e("NewsWorkflow", "Firestore exception: ${e.message}")
+                    failures.add("Firestore exception: ${e.message}")
+                }
+            } else {
+                Log.d("NewsWorkflow", "User not signed in — Firestore article save skipped")
+            }
+
+            // ── Step C: Push to WordPress as draft ────────────────────────────
+            var pushed = 0
             if (activeWpSite != null) {
                 val pub = wpClient.pushNewsDraftWithSeo(activeWpSite, pipelineResult.article, adsCode)
                 if (pub.success) {
@@ -186,11 +259,12 @@ class NewsWorkflowManager(private val context: Context) {
             }
 
             WorkflowResult(
-                fetchedCount    = 1,
-                processedCount  = 1,
-                savedDraftCount = 1,
+                fetchedCount     = 1,
+                processedCount   = 1,
+                savedDraftCount  = 1,
                 pushedDraftCount = pushed,
-                failures        = failures
+                firestoreId      = firestoreDocId,
+                failures         = failures
             )
         }
 
@@ -212,7 +286,6 @@ class NewsWorkflowManager(private val context: Context) {
         val merged = mutableListOf<RssItem>()
         for (feed in feeds) {
             try {
-                // FIX: parameter is `enrichItems` (not scrapeImages)
                 val items = rssParser.fetchFeed(
                     feedUrl      = feed.url,
                     feedName     = feed.name,

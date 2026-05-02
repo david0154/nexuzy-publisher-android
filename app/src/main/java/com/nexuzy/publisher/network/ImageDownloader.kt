@@ -18,7 +18,8 @@ import java.util.concurrent.TimeUnit
  *
  * WATERMARK DETECTION: After downloading, the image is checked for watermarks
  * (text overlays, semi-transparent bands, repeated pixel patterns in corners).
- * If a watermark is detected, falls back to Google Custom Search for a clean image.
+ * If a watermark is detected, falls back to Wikipedia/Wikimedia Commons for a
+ * clean, freely-licensed replacement image. No API key required.
  */
 class ImageDownloader(private val context: Context) {
 
@@ -30,7 +31,7 @@ class ImageDownloader(private val context: Context) {
 
     /**
      * Download an image from [url] and save it to the app cache.
-     * If watermark is detected, searches Google for a clean replacement.
+     * If watermark is detected, searches Wikipedia/Wikimedia for a clean replacement.
      * Returns the absolute local file path, or empty string on failure.
      */
     fun downloadImage(
@@ -52,17 +53,17 @@ class ImageDownloader(private val context: Context) {
             return primaryPath
         }
 
-        Log.w("ImageDownloader", "Watermark detected in RSS image — searching for clean replacement")
+        Log.w("ImageDownloader", "Watermark detected in RSS image — searching Wikipedia for clean replacement")
 
-        // Step 3: Watermark found — search Google for a clean image
-        if (apiKeyManager != null && searchQuery.isNotBlank()) {
+        // Step 3: Watermark found — search Wikipedia/Wikimedia for a clean image (no API key needed)
+        if (searchQuery.isNotBlank()) {
             val cleanImageUrl = searchCleanImage(searchQuery, apiKeyManager)
             if (cleanImageUrl.isNotBlank()) {
                 val (cleanPath, _) = downloadToBytes(cleanImageUrl, titleHint)
                 if (cleanPath.isNotBlank()) {
                     // Delete the watermarked file
                     File(primaryPath).delete()
-                    Log.i("ImageDownloader", "Replaced watermarked image with clean search result")
+                    Log.i("ImageDownloader", "Replaced watermarked image with Wikipedia clean result")
                     return cleanPath
                 }
             }
@@ -75,8 +76,6 @@ class ImageDownloader(private val context: Context) {
 
     // ──────────────────────────────────────────────────────────────────────────
     // Watermark Detection
-    // Checks corner/edge regions for semi-transparent overlays or repeated
-    // low-alpha bands — the most common watermark patterns.
     // ──────────────────────────────────────────────────────────────────────────
 
     private fun detectWatermark(imageBytes: ByteArray): Boolean {
@@ -90,12 +89,11 @@ class ImageDownloader(private val context: Context) {
 
             val cornerSize = (minOf(w, h) * 0.18).toInt().coerceAtLeast(20)
 
-            // Check all four corners for semi-transparent or near-white/near-gray bands
             val corners = listOf(
-                Pair(0, 0),                          // top-left
-                Pair(w - cornerSize, 0),             // top-right
-                Pair(0, h - cornerSize),             // bottom-left
-                Pair(w - cornerSize, h - cornerSize) // bottom-right
+                Pair(0, 0),
+                Pair(w - cornerSize, 0),
+                Pair(0, h - cornerSize),
+                Pair(w - cornerSize, h - cornerSize)
             )
 
             var suspiciousCorners = 0
@@ -105,7 +103,6 @@ class ImageDownloader(private val context: Context) {
                 }
             }
 
-            // Also check the bottom strip (common for Getty, Shutterstock etc.)
             val stripHeight = (h * 0.08).toInt().coerceAtLeast(12)
             val bottomStripSuspicious = isWatermarkStrip(bitmap, 0, h - stripHeight, w, stripHeight)
 
@@ -118,11 +115,6 @@ class ImageDownloader(private val context: Context) {
         }
     }
 
-    /**
-     * Checks a rectangular region for watermark indicators:
-     * - High proportion of near-white or near-gray semi-transparent pixels
-     * - Uniform color band (solid overlay)
-     */
     private fun isWatermarkRegion(bitmap: Bitmap, x: Int, y: Int, w: Int, h: Int): Boolean {
         val endX = (x + w).coerceAtMost(bitmap.width)
         val endY = (y + h).coerceAtMost(bitmap.height)
@@ -139,26 +131,17 @@ class ImageDownloader(private val context: Context) {
                 val g = Color.green(pixel)
                 val b = Color.blue(pixel)
                 val brightness = (r + g + b) / 3
-
-                // Near-white (>220) or near-gray (all channels within 20 of each other and between 160-220)
                 val isNearWhite = brightness > 220
                 val isNearGray = (maxOf(r, g, b) - minOf(r, g, b)) < 25 && brightness in 140..225
-
                 if (isNearWhite || isNearGray) suspiciousPixels++
                 totalPixels++
             }
         }
 
         if (totalPixels == 0) return false
-        val ratio = suspiciousPixels.toFloat() / totalPixels
-        // If more than 55% of sampled pixels are near-white/gray → likely watermark overlay
-        return ratio > 0.55f
+        return (suspiciousPixels.toFloat() / totalPixels) > 0.55f
     }
 
-    /**
-     * Checks a horizontal strip for a uniform-color watermark band
-     * (like a white/black semi-transparent bar used by stock agencies).
-     */
     private fun isWatermarkStrip(bitmap: Bitmap, x: Int, y: Int, w: Int, h: Int): Boolean {
         val endX = (x + w).coerceAtMost(bitmap.width)
         val endY = (y + h).coerceAtMost(bitmap.height)
@@ -186,69 +169,99 @@ class ImageDownloader(private val context: Context) {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Google Custom Search fallback
-    // Uses Google Custom Search JSON API (free tier: 100 queries/day)
-    // Requires: Google API Key + Custom Search Engine ID stored in ApiKeyManager
+    // Free Image Search Fallback
+    //
+    // Strategy (no API key required, completely free):
+    //   1. Wikipedia PageImages API  — best quality, CC-licensed images
+    //   2. Wikimedia Commons search  — broader search across all media
+    //
+    // Replaces the old Google Custom Search JSON API which required a paid key.
     // ──────────────────────────────────────────────────────────────────────────
 
-    private fun searchCleanImage(query: String, apiKeyManager: ApiKeyManager): String {
-        return try {
-            val apiKey = apiKeyManager.getGoogleSearchApiKey()
-            val cseId  = apiKeyManager.getGoogleSearchCseId()
+    private fun searchCleanImage(query: String, apiKeyManager: ApiKeyManager?): String {
+        // ── Strategy 1: Wikipedia PageImages API ──────────────────────────────
+        try {
+            val encoded = java.net.URLEncoder.encode(query.take(80), "UTF-8")
+            val wikiUrl = "https://en.wikipedia.org/w/api.php" +
+                "?action=query" +
+                "&prop=pageimages" +
+                "&format=json" +
+                "&piprop=original" +
+                "&titles=$encoded" +
+                "&redirects=1"
 
-            if (apiKey.isBlank() || cseId.isBlank()) {
-                Log.w("ImageDownloader", "Google Search API key or CSE ID not configured — cannot search for replacement image")
-                return ""
-            }
+            val request = Request.Builder()
+                .url(wikiUrl)
+                .addHeader("User-Agent", "NexuzyPublisher/2.0 (Android; nexuzy.com)")
+                .build()
 
-            val safeQuery = query.take(100).replace(" ", "+")
-            val searchUrl = "https://www.googleapis.com/customsearch/v1" +
-                "?key=$apiKey" +
-                "&cx=$cseId" +
-                "&q=$safeQuery" +
-                "&searchType=image" +
-                "&num=5" +
-                "&imgSize=large" +
-                "&safe=active"
-
-            val request  = Request.Builder().url(searchUrl).build()
             val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.w("ImageDownloader", "Google Search failed: HTTP ${response.code}")
-                return ""
-            }
-
-            val body = response.body?.string() ?: return ""
-            parseFirstImageUrl(body)
-        } catch (e: Exception) {
-            Log.e("ImageDownloader", "Google image search exception: ${e.message}")
-            ""
-        }
-    }
-
-    private fun parseFirstImageUrl(jsonBody: String): String {
-        return try {
-            val json  = com.google.gson.JsonParser.parseString(jsonBody).asJsonObject
-            val items = json.getAsJsonArray("items") ?: return ""
-            for (i in 0 until items.size()) {
-                val item    = items[i].asJsonObject
-                val imgUrl  = item.get("link")?.asString ?: continue
-                val mimeType = item.getAsJsonObject("image")?.get("thumbnailLink")?.asString
-                // Prefer jpg/png/webp, skip known watermark sites
-                val lowerUrl = imgUrl.lowercase()
-                if (isKnownWatermarkedDomain(lowerUrl)) continue
-                if (lowerUrl.endsWith(".jpg") || lowerUrl.endsWith(".jpeg") ||
-                    lowerUrl.endsWith(".png") || lowerUrl.endsWith(".webp") ||
-                    lowerUrl.contains("image") || mimeType != null) {
-                    return imgUrl
+            if (response.isSuccessful) {
+                val body = response.body?.string() ?: ""
+                val parsed = com.google.gson.JsonParser.parseString(body).asJsonObject
+                val pages = parsed.getAsJsonObject("query")
+                    ?.getAsJsonObject("pages")
+                if (pages != null) {
+                    for ((_, page) in pages.entrySet()) {
+                        val imgUrl = page.asJsonObject
+                            .getAsJsonObject("original")
+                            ?.get("source")?.asString
+                        if (!imgUrl.isNullOrBlank() && !isKnownWatermarkedDomain(imgUrl.lowercase())) {
+                            Log.i("ImageDownloader", "Wikipedia PageImages fallback: $imgUrl")
+                            return imgUrl
+                        }
+                    }
                 }
             }
-            // Fallback: return first link regardless of extension
-            items[0]?.asJsonObject?.get("link")?.asString ?: ""
         } catch (e: Exception) {
-            Log.e("ImageDownloader", "Image URL parse error: ${e.message}")
-            ""
+            Log.w("ImageDownloader", "Wikipedia PageImages search failed: ${e.message}")
         }
+
+        // ── Strategy 2: Wikimedia Commons search ─────────────────────────────
+        try {
+            val encoded = java.net.URLEncoder.encode(query.take(80), "UTF-8")
+            val commonsUrl = "https://commons.wikimedia.org/w/api.php" +
+                "?action=query" +
+                "&generator=search" +
+                "&gsrnamespace=6" +
+                "&gsrsearch=$encoded" +
+                "&gsrlimit=5" +
+                "&prop=imageinfo" +
+                "&iiprop=url" +
+                "&format=json"
+
+            val request = Request.Builder()
+                .url(commonsUrl)
+                .addHeader("User-Agent", "NexuzyPublisher/2.0 (Android; nexuzy.com)")
+                .build()
+
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string() ?: ""
+                val parsed = com.google.gson.JsonParser.parseString(body).asJsonObject
+                val pages = parsed.getAsJsonObject("query")
+                    ?.getAsJsonObject("pages")
+                if (pages != null) {
+                    for ((_, page) in pages.entrySet()) {
+                        val imageInfoArray = page.asJsonObject
+                            .getAsJsonArray("imageinfo") ?: continue
+                        if (imageInfoArray.size() > 0) {
+                            val imgUrl = imageInfoArray[0].asJsonObject
+                                .get("url")?.asString
+                            if (!imgUrl.isNullOrBlank() && !isKnownWatermarkedDomain(imgUrl.lowercase())) {
+                                Log.i("ImageDownloader", "Wikimedia Commons fallback: $imgUrl")
+                                return imgUrl
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("ImageDownloader", "Wikimedia Commons search failed: ${e.message}")
+        }
+
+        Log.w("ImageDownloader", "All free image search strategies exhausted for: $query")
+        return ""
     }
 
     /** Domains known to always watermark their images — skip them in search results. */
