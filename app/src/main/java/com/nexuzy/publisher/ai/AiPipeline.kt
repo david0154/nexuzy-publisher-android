@@ -15,15 +15,15 @@ import kotlinx.coroutines.withContext
 
 /**
  * ╔══════════════════════════════════════════════════════════════════════════╗
- * ║    NEXUZY AI WRITER — 8-STAGE PIPELINE (v10 • Offline Model)            ║
+ * ║    NEXUZY AI WRITER — 8-STAGE PIPELINE (v11 • Sarvam-First)             ║
  * ╠══════════════════════════════════════════════════════════════════════════╣
  * ║  STAGE 0 │ WEB CONTEXT   │ DuckDuckGo → live summary + source links     ║
  * ║  STAGE 1 │ WRITE         │ 🤖 Offline LiteRT model (100% on-device)     ║
  * ║  STAGE 2 │ FACT-CHECK    │ OpenAI → Gemini → Sarvam (any available)     ║
- * ║  STAGE 3 │ HUMANIZE      │ Gemini → OpenAI → Sarvam fallback            ║
+ * ║  STAGE 3 │ HUMANIZE      │ Sarvam → Gemini → OpenAI fallback            ║
  * ║  STAGE 4 │ GRAMMAR       │ Sarvam → OpenAI fallback                     ║
- * ║  STAGE 5 │ SEO           │ Gemini → Sarvam → OpenAI fallback            ║
- * ║  STAGE 6 │ TITLE + IMAGE │ Gemini → Sarvam → OpenAI (SEO image check)  ║
+ * ║  STAGE 5 │ SEO           │ Sarvam → Gemini → OpenAI fallback            ║
+ * ║  STAGE 6 │ TITLE + IMAGE │ Sarvam → Gemini → OpenAI (SEO image check)  ║
  * ║  STAGE 7 │ IMAGE         │ Watermark check + fallback search            ║
  * ╚══════════════════════════════════════════════════════════════════════════╝
  *
@@ -33,11 +33,11 @@ import kotlinx.coroutines.withContext
  *   Stage 1  = Offline LiteRT model ONLY → writes the full article (zero API cost)
  *              The model uses DDG context + source links as its knowledge base.
  *   Stage 2  = OpenAI (primary fact-check) → Gemini → Sarvam (fallbacks)
- *   Stage 3  = Gemini (humanize) → OpenAI → Sarvam (fallbacks)
+ *   Stage 3  = Sarvam (humanize) → Gemini → OpenAI (fallbacks)
  *   Stage 4  = Sarvam (grammar/spelling) → OpenAI fallback
- *   Stage 5  = Gemini (SEO meta) → Sarvam → OpenAI fallbacks
- *              Also checks/suggests SEO-friendly image via Gemini
- *   Stage 6  = Gemini → Sarvam → OpenAI (title rewrite, SEO image alt text)
+ *   Stage 5  = Sarvam (SEO meta) → Gemini → OpenAI fallbacks
+ *              Also checks/suggests SEO-friendly image via Sarvam
+ *   Stage 6  = Sarvam → Gemini → OpenAI (title rewrite, SEO image alt text)
  *   Stage 7  = Download/verify article image
  *
  *   If ALL API keys are absent, stages 2–6 are skipped gracefully.
@@ -97,16 +97,19 @@ class AiPipeline(private val context: Context) {
         FACT_CHECKING,              // Stage 2 — OpenAI primary
         FACT_CHECK_GEMINI_FALLBACK, // Stage 2 — Gemini fallback
         FACT_CHECK_SARVAM_FALLBACK, // Stage 2 — Sarvam fallback
-        HUMANIZING,                 // Stage 3 — Gemini primary
+        HUMANIZING,                 // Stage 3 — Sarvam primary
+        HUMANIZING_GEMINI_FALLBACK, // Stage 3 — Gemini fallback
         HUMANIZING_OPENAI_FALLBACK, // Stage 3 — OpenAI fallback
-        HUMANIZING_SARVAM_FALLBACK, // Stage 3 — Sarvam fallback
+        HUMANIZING_SARVAM_FALLBACK, // kept for compat (unused in v11)
         SARVAM_CHECKING,            // Stage 4 — grammar
         GRAMMAR_OPENAI_FALLBACK,    // Stage 4 — OpenAI grammar fallback
-        SEO_GENERATING,             // Stage 5 — Gemini primary
-        SEO_SARVAM_FALLBACK,        // Stage 5 — Sarvam fallback
+        SEO_GENERATING,             // Stage 5 — Sarvam primary
+        SEO_GEMINI_FALLBACK,        // Stage 5 — Gemini fallback
+        SEO_SARVAM_FALLBACK,        // kept for compat (unused in v11)
         SEO_OPENAI_FALLBACK,        // Stage 5 — OpenAI fallback
-        TITLE_REWRITING,            // Stage 6 — Gemini primary
-        TITLE_SARVAM_FALLBACK,      // Stage 6 — Sarvam fallback
+        TITLE_REWRITING,            // Stage 6 — Sarvam primary
+        TITLE_GEMINI_FALLBACK,      // Stage 6 — Gemini fallback
+        TITLE_SARVAM_FALLBACK,      // kept for compat (unused in v11)
         TITLE_OPENAI_FALLBACK,      // Stage 6 — OpenAI fallback
         IMAGE_DOWNLOADING,          // Stage 7
         IMAGE_WATERMARK_SEARCH,     // Stage 7
@@ -239,8 +242,6 @@ class AiPipeline(private val context: Context) {
             stepErrors.add("[S0-DDG-ex] ${e.message}")
         }
 
-        // Build enriched context block for the offline model:
-        // includes live DDG summary + source URLs so the model can cite them
         val enrichedContext = buildEnrichedContext(
             rssTitle       = rssItem.title,
             rssDescription = rssItem.description,
@@ -250,8 +251,6 @@ class AiPipeline(private val context: Context) {
 
         // ════════════════════════════════════════════════════════════════
         // STAGE 1 — 🤖 Offline LiteRT model writes the article (PRIMARY)
-        //   Receives DDG live context + source links as knowledge input.
-        //   Zero API cost. 100% on-device.
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.OFFLINE_WRITING,
             "🤖 Stage 1/7 — Offline model writing article…"))
@@ -300,7 +299,6 @@ class AiPipeline(private val context: Context) {
 
         // ════════════════════════════════════════════════════════════════
         // STAGE 2 — Fact-check: OpenAI → Gemini → Sarvam
-        //   APIs verify facts and may correct the offline-written content.
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.FACT_CHECKING,
             "🔍 Stage 2/7 — Fact-checking (OpenAI)…"))
@@ -310,7 +308,6 @@ class AiPipeline(private val context: Context) {
         var rawConfidence     = 0f
         var openAiDone        = false
 
-        // Primary: OpenAI
         try {
             val r = openAi.factCheckArticle(title = rssItem.title, content = currentContent)
             if (r.success) {
@@ -326,7 +323,6 @@ class AiPipeline(private val context: Context) {
                 stepErrors.add("[S2-OpenAI] ${r.error} — trying Gemini…")
                 onProgress?.invoke(PipelineProgress(Step.FACT_CHECK_GEMINI_FALLBACK,
                     "⚠️ Stage 2/7 — Fact-check via Gemini…"))
-                // Fallback: Gemini
                 val gr = gemini.factCheckArticle(title = rssItem.title, content = currentContent)
                 if (gr.success) {
                     factCheckPassed   = gr.isAccurate
@@ -340,7 +336,6 @@ class AiPipeline(private val context: Context) {
                     stepErrors.add("[S2-Gemini] ${gr.error} — trying Sarvam…")
                     onProgress?.invoke(PipelineProgress(Step.FACT_CHECK_SARVAM_FALLBACK,
                         "⚠️ Stage 2/7 — Fact-check via Sarvam…"))
-                    // Fallback: Sarvam
                     val sr = sarvam.factCheckArticle(title = rssItem.title, content = currentContent)
                     if (sr.success) {
                         factCheckPassed   = sr.isAccurate
@@ -362,34 +357,58 @@ class AiPipeline(private val context: Context) {
         }
 
         // ════════════════════════════════════════════════════════════════
-        // STAGE 3 — Humanize: Gemini → OpenAI → Sarvam
+        // STAGE 3 — Humanize: Sarvam → Gemini → OpenAI
         //   Makes the offline model's output sound like a human journalist.
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.HUMANIZING,
-            "🧑 Stage 3/7 — Humanizing (Gemini)…"))
+            "🧑 Stage 3/7 — Humanizing (Sarvam)…"))
 
         val humanizePrompt = buildHumanizePrompt()
-        try {
-            val r = gemini.writeNewsArticle(
-                rssTitle       = rssItem.title,
-                rssDescription = humanizePrompt,
-                rssFullContent = currentContent,
-                category       = rssItem.feedCategory,
-                model          = model,
-                maxWords       = maxWords + 50
-            )
-            if (r.success && r.content.isNotBlank() &&
-                r.content.length >= currentContent.length / 2) {
-                currentContent   = r.content
-                humanized        = true
-                humanizeProvider = "gemini"
-            } else {
-                stepErrors.add("[S3-Gemini] ${r.error.ifBlank { "Empty" }}")
+
+        // Primary: Sarvam
+        if (!humanized) {
+            try {
+                val r = sarvam.humanizeArticle(title = rssItem.title, content = currentContent)
+                if (r.success && r.humanizedContent.isNotBlank() &&
+                    r.humanizedContent.length >= currentContent.length / 2) {
+                    currentContent   = r.humanizedContent
+                    humanized        = true
+                    humanizeProvider = "sarvam"
+                } else {
+                    stepErrors.add("[S3-Sarvam] ${r.error.ifBlank { "Empty" }} — trying Gemini…")
+                }
+            } catch (e: Exception) {
+                stepErrors.add("[S3-Sarvam-ex] ${e.message} — trying Gemini…")
             }
-        } catch (e: Exception) {
-            stepErrors.add("[S3-Gemini-ex] ${e.message}")
         }
 
+        // Fallback 1: Gemini
+        if (!humanized) {
+            onProgress?.invoke(PipelineProgress(Step.HUMANIZING_GEMINI_FALLBACK,
+                "⚠️ Stage 3/7 — Humanizing via Gemini…"))
+            try {
+                val r = gemini.writeNewsArticle(
+                    rssTitle       = rssItem.title,
+                    rssDescription = humanizePrompt,
+                    rssFullContent = currentContent,
+                    category       = rssItem.feedCategory,
+                    model          = model,
+                    maxWords       = maxWords + 50
+                )
+                if (r.success && r.content.isNotBlank() &&
+                    r.content.length >= currentContent.length / 2) {
+                    currentContent   = r.content
+                    humanized        = true
+                    humanizeProvider = "gemini"
+                } else {
+                    stepErrors.add("[S3-Gemini] ${r.error.ifBlank { "Empty" }} — trying OpenAI…")
+                }
+            } catch (e: Exception) {
+                stepErrors.add("[S3-Gemini-ex] ${e.message} — trying OpenAI…")
+            }
+        }
+
+        // Fallback 2: OpenAI
         if (!humanized) {
             onProgress?.invoke(PipelineProgress(Step.HUMANIZING_OPENAI_FALLBACK,
                 "⚠️ Stage 3/7 — Humanizing via OpenAI…"))
@@ -401,33 +420,15 @@ class AiPipeline(private val context: Context) {
                     humanized        = true
                     humanizeProvider = "openai"
                 } else {
-                    stepErrors.add("[S3-OpenAI] ${r.error.ifBlank { "Empty" }}")
+                    stepErrors.add("[S3-OpenAI] ${r.error.ifBlank { "Empty" }} (skipped)")
                 }
             } catch (e: Exception) {
                 stepErrors.add("[S3-OpenAI-ex] ${e.message}")
             }
         }
 
-        if (!humanized) {
-            onProgress?.invoke(PipelineProgress(Step.HUMANIZING_SARVAM_FALLBACK,
-                "⚠️ Stage 3/7 — Humanizing via Sarvam…"))
-            try {
-                val r = sarvam.humanizeArticle(title = rssItem.title, content = currentContent)
-                if (r.success && r.humanizedContent.isNotBlank() &&
-                    r.humanizedContent.length >= currentContent.length / 2) {
-                    currentContent   = r.humanizedContent
-                    humanized        = true
-                    humanizeProvider = "sarvam"
-                } else {
-                    stepErrors.add("[S3-Sarvam] ${r.error.ifBlank { "Empty" }} (skipped)")
-                }
-            } catch (e: Exception) {
-                stepErrors.add("[S3-Sarvam-ex] ${e.message}")
-            }
-        }
-
         // ════════════════════════════════════════════════════════════════
-        // STAGE 4 — Grammar: Sarvam → OpenAI fallback
+        // STAGE 4 — Grammar: Sarvam → OpenAI fallback  (unchanged)
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.SARVAM_CHECKING,
             "✏️ Stage 4/7 — Grammar check (Sarvam)…"))
@@ -456,33 +457,39 @@ class AiPipeline(private val context: Context) {
         }
 
         // ════════════════════════════════════════════════════════════════
-        // STAGE 5 — SEO: Gemini → Sarvam → OpenAI
+        // STAGE 5 — SEO: Sarvam → Gemini → OpenAI
         //   Generates meta, keywords, focus keyphrase, SEO image suggestion.
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.SEO_GENERATING,
-            "🔎 Stage 5/7 — Generating SEO metadata (Gemini)…"))
-        var seoResult = gemini.generateSeoData(
+            "🔎 Stage 5/7 — Generating SEO metadata (Sarvam)…"))
+
+        // Primary: Sarvam
+        var seoResult = sarvam.generateSeoData(
             title          = rssItem.title,
             articleContent = currentContent,
-            category       = rssItem.feedCategory,
-            model          = model
+            category       = rssItem.feedCategory
         )
-        if (!seoResult.success) {
-            stepErrors.add("[S5-Gemini-SEO] ${seoResult.error}")
-            onProgress?.invoke(PipelineProgress(Step.SEO_SARVAM_FALLBACK,
-                "⚠️ Stage 5/7 — SEO via Sarvam…"))
+        if (seoResult.success) {
+            sarvamSeo = true
+        } else {
+            stepErrors.add("[S5-Sarvam-SEO] ${seoResult.error} — trying Gemini…")
+            onProgress?.invoke(PipelineProgress(Step.SEO_GEMINI_FALLBACK,
+                "⚠️ Stage 5/7 — SEO via Gemini…"))
+            // Fallback 1: Gemini
             try {
-                seoResult = sarvam.generateSeoData(
+                val gr = gemini.generateSeoData(
                     title          = rssItem.title,
                     articleContent = currentContent,
-                    category       = rssItem.feedCategory
+                    category       = rssItem.feedCategory,
+                    model          = model
                 )
-                if (seoResult.success) {
-                    sarvamSeo = true
+                if (gr.success) {
+                    seoResult = gr
                 } else {
-                    stepErrors.add("[S5-Sarvam-SEO] ${seoResult.error}")
+                    stepErrors.add("[S5-Gemini-SEO] ${gr.error} — trying OpenAI…")
                     onProgress?.invoke(PipelineProgress(Step.SEO_OPENAI_FALLBACK,
                         "⚠️ Stage 5/7 — SEO via OpenAI…"))
+                    // Fallback 2: OpenAI
                     val or3 = openAi.generateSeoData(
                         title          = rssItem.title,
                         articleContent = currentContent,
@@ -495,6 +502,7 @@ class AiPipeline(private val context: Context) {
                 stepErrors.add("[S5-SEO-ex] ${e.message}")
             }
         }
+
         val tags            = if (seoResult.success) seoResult.tags.joinToString(", ") else ""
         val metaKeywords    = if (seoResult.success) seoResult.metaKeywords else ""
         val focusKeyphrase  = if (seoResult.success) seoResult.focusKeyphrase else ""
@@ -502,10 +510,10 @@ class AiPipeline(private val context: Context) {
         val seoImageAlt     = if (seoResult.success) seoResult.imageAltText else ""
 
         // ════════════════════════════════════════════════════════════════
-        // STAGE 6 — Title + SEO image alt: Gemini → Sarvam → OpenAI
+        // STAGE 6 — Title + SEO image alt: Sarvam → Gemini → OpenAI
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.TITLE_REWRITING,
-            "📝 Stage 6/7 — Rewriting headline…"))
+            "📝 Stage 6/7 — Rewriting headline (Sarvam)…"))
         val finalTitle = rewriteTitle(
             originalTitle  = rssItem.title,
             articleContent = currentContent,
@@ -561,14 +569,14 @@ class AiPipeline(private val context: Context) {
             imagePath         = localImagePath,
             status            = "draft",
             wordpressSiteId   = wordpressSiteId,
-            geminiChecked     = false,   // Gemini NOT used for writing
+            geminiChecked     = false,
             openaiChecked     = openAiDone,
             sarvamChecked     = sarvamDone,
             factCheckPassed   = factCheckPassed,
             factCheckFeedback = factCheckFeedback,
             confidenceScore   = displayConfidence,
             aiProvider        = "offline_model",
-            sourceLinks       = sourceLinks.joinToString("\n")  // DDG-sourced article links
+            sourceLinks       = sourceLinks.joinToString("\n")
         )
 
         PipelineResult(
@@ -597,11 +605,6 @@ class AiPipeline(private val context: Context) {
     // Private helpers
     // ──────────────────────────────────────────────────────────────────────
 
-    /**
-     * Builds the enriched context block fed to the offline model.
-     * Includes live DDG summary + source article links so the model
-     * can produce current, cited content.
-     */
     private fun buildEnrichedContext(
         rssTitle: String,
         rssDescription: String,
@@ -671,7 +674,24 @@ class AiPipeline(private val context: Context) {
     ): String {
         val titlePrompt = buildTitlePrompt(originalTitle, articleContent, focusKeyphrase, category)
 
-        // Provider 1: Gemini
+        // Provider 1: Sarvam
+        try {
+            val r = sarvam.generateSeoData(
+                title          = originalTitle,
+                articleContent = articleContent.take(800),
+                category       = category
+            )
+            val h = if (r.success && r.focusKeyphrase.isNotBlank())
+                buildSarvamTitleFallback(r.focusKeyphrase) else null
+            if (h != null) { onProviderUsed("sarvam"); return h }
+            onFallback(Step.TITLE_GEMINI_FALLBACK,
+                "[S6-Sarvam-Title] No usable title — trying Gemini…")
+        } catch (e: Exception) {
+            onFallback(Step.TITLE_GEMINI_FALLBACK,
+                "[S6-Sarvam-Title-ex] ${e.message} — trying Gemini…")
+        }
+
+        // Provider 2: Gemini
         try {
             val r = gemini.writeNewsArticle(
                 rssTitle       = originalTitle,
@@ -683,28 +703,11 @@ class AiPipeline(private val context: Context) {
             )
             val h = extractHeadline(r.content)
             if (r.success && h != null) { onProviderUsed("gemini"); return h }
-            onFallback(Step.TITLE_SARVAM_FALLBACK,
-                "[S6-Gemini-Title] ${r.error.ifBlank { "Empty" }} — trying Sarvam…")
-        } catch (e: Exception) {
-            onFallback(Step.TITLE_SARVAM_FALLBACK,
-                "[S6-Gemini-Title-ex] ${e.message} — trying Sarvam…")
-        }
-
-        // Provider 2: Sarvam
-        try {
-            val r = sarvam.generateSeoData(
-                title          = originalTitle,
-                articleContent = articleContent.take(800),
-                category       = category
-            )
-            val h = if (r.success && r.focusKeyphrase.isNotBlank())
-                buildSarvamTitleFallback(r.focusKeyphrase) else null
-            if (h != null) { onProviderUsed("sarvam"); return h }
             onFallback(Step.TITLE_OPENAI_FALLBACK,
-                "[S6-Sarvam-Title] No usable title — trying OpenAI…")
+                "[S6-Gemini-Title] ${r.error.ifBlank { "Empty" }} — trying OpenAI…")
         } catch (e: Exception) {
             onFallback(Step.TITLE_OPENAI_FALLBACK,
-                "[S6-Sarvam-Title-ex] ${e.message} — trying OpenAI…")
+                "[S6-Gemini-Title-ex] ${e.message} — trying OpenAI…")
         }
 
         // Provider 3: OpenAI
