@@ -6,13 +6,12 @@ import kotlinx.coroutines.withContext
 
 /**
  * OfflineArticleWriter — powered by Devil AI 2B
- * ═══════════════════════════════════════════════════════════════════════
- * Writes full publish-ready news articles 100% on-device.
- * No API key. No internet needed (model already downloaded).
+ * ══════════════════════════════════════════════════════════════════════
+ * Writes full, publish-ready news articles 100% on-device.
+ * Uses Gemma 3n E2B LiteRT (.litertlm) via MediaPipe.
  *
- * This is the PRIMARY article writer in AiPipeline Stage 1.
- * Online APIs (Gemini, Sarvam) are NOT used for writing —
- * they are only used for fact-check, grammar, and SEO (Stages 2–6).
+ * No API key needed. No internet needed at write time
+ * (model auto-downloads on first run via ModelDownloadManager).
  */
 class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
 
@@ -27,15 +26,6 @@ class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
         val usedDevilAi: Boolean = true
     )
 
-    /**
-     * Write a full news article using Devil AI 2B (on-device).
-     *
-     * @param title        RSS headline
-     * @param description  RSS summary / snippet
-     * @param category     Feed category (Technology, Sports, etc.)
-     * @param targetWords  Approximate article word count
-     * @param onProgress   UI progress callback
-     */
     suspend fun write(
         title: String,
         description: String,
@@ -45,31 +35,25 @@ class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
     ): WriteResult = withContext(Dispatchers.IO) {
 
         if (!gemmaClient.isModelReady()) {
-            // Trigger background download if not ready
-            onProgress?.invoke("DOWNLOADING",
-                "📥 Devil AI 2B model downloading… please wait")
             return@withContext WriteResult(
                 success = false,
-                error   = "Devil AI 2B model is not ready yet. Download in progress."
+                error   = "Devil AI 2B model is not ready. Download in progress."
             )
         }
 
-        onProgress?.invoke("WRITING",
-            "😈 Devil AI 2B is writing your article offline…")
+        onProgress?.invoke("WRITING", "\uD83D\uDE08 Devil AI 2B writing article offline\u2026")
 
-        val prompt = buildArticlePrompt(title, description, category, targetWords)
-        Log.d(TAG, "Prompt: ${prompt.take(120)}…")
+        val prompt = buildPrompt(title, description, category, targetWords)
+        val sb     = StringBuilder()
 
-        val sb = StringBuilder()
         val result = gemmaClient.generate(
             prompt    = prompt,
             maxTokens = estimateTokens(targetWords),
             onToken   = { token ->
                 sb.append(token)
                 if (sb.length % 300 == 0) {
-                    val wordCount = sb.split(" ").size
-                    onProgress?.invoke("WRITING",
-                        "😈 Devil AI 2B writing… ~$wordCount words")
+                    val words = sb.split(" ").size
+                    onProgress?.invoke("WRITING", "\uD83D\uDE08 Devil AI 2B writing\u2026 ~$words words")
                 }
             }
         )
@@ -80,77 +64,73 @@ class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
 
         val raw     = if (sb.isNotEmpty()) sb.toString() else result.text
         val cleaned = postProcess(raw, title)
+        val words   = cleaned.split(" ").size
 
-        val words = cleaned.split(" ").size
         Log.i(TAG, "Devil AI 2B wrote: $words words")
-        onProgress?.invoke("DONE", "✅ Devil AI 2B wrote $words words offline")
+        onProgress?.invoke("DONE", "\u2705 Devil AI 2B wrote $words words offline")
 
         WriteResult(
-            success      = cleaned.isNotBlank(),
-            content      = cleaned,
-            error        = if (cleaned.isBlank()) "Empty output from model" else "",
-            usedDevilAi  = true
+            success     = cleaned.isNotBlank(),
+            content     = cleaned,
+            error       = if (cleaned.isBlank()) "Empty output from model" else "",
+            usedDevilAi = true
         )
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Prompt — journalist style, removes all AI filler
-    // ──────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────
+    // Prompt (ChatML format — matches Gemma 3n IT template)
+    // ──────────────────────────────────────────────────────────────────
 
-    private fun buildArticlePrompt(
+    private fun buildPrompt(
         title: String,
         description: String,
         category: String,
         targetWords: Int
     ): String {
-        val desc = description.trim().take(500).ifBlank { "No additional context." }
-        return """
-<|system|>
-You are a professional news journalist. Write factual, neutral, human-readable news articles.
-Never add disclaimers. Never say you are an AI. Output only the article, nothing else.
-<|end|>
-<|user|>
-Write a $targetWords-word news article for the $category section.
+        val ctx = description.trim().take(500).ifBlank { "No additional context." }
+        return """<start_of_turn>user
+You are a professional news journalist. Write a factual, neutral, human-readable news article.
 
+Category        : $category
 Headline source : $title
-Context         : $desc
+Context         : $ctx
 
 RULES:
-- First line = article headline (no label, no colon prefix)
+- First line = article headline (no label prefix)
 - Blank line after headline
 - Lead paragraph: Who/What/When/Where/Why in ≤3 sentences
 - 3–4 body paragraphs: facts, background, impact
 - Short closing paragraph: what happens next
-- NO markdown, NO bullets, NO sub-headers inside the body
-- NO AI filler: "notably", "in conclusion", "it is worth noting", "game-changer", "pivotal"
-- Natural contractions: it's, don't, hasn't, they've, we're
-- Active voice preferred, vary sentence length
+- NO markdown, NO bullet points, NO sub-headers
+- NO AI filler: "notably", "in conclusion", "it is worth noting", "game-changer"
+- Natural contractions: it's, don't, hasn't, they've
+- Active voice, vary sentence length
 - Approximate total: $targetWords words
 
-Write the complete article now:
-<|end|>
-<|assistant|>
-        """.trimIndent()
+Write the complete article now. Output only the article.
+<end_of_turn>
+<start_of_turn>model
+"""
     }
 
-    // ──────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────
     // Post-processing
-    // ──────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────
 
     private fun postProcess(raw: String, originalTitle: String): String {
         var text = raw.trim()
 
-        // Strip model padding tokens
+        // Strip Gemma control tokens
         listOf(
-            "<|end|>", "<|assistant|>", "<|user|>", "<|system|>",
-            "<end_of_turn>", "[INST]", "[/INST]", "</s>", "<s>", "<bos>", "<eos>"
+            "<end_of_turn>", "<start_of_turn>", "<bos>", "<eos>",
+            "<|end|>", "<|assistant|>", "<|user|>", "<|system|>"
         ).forEach { text = text.replace(it, "") }
 
         text = text.trim()
         val lines = text.lines().filter { it.isNotBlank() }
         if (lines.isEmpty()) return ""
 
-        // If model didn't include a headline, prepend original
+        // Prepend title if model skipped it
         val hasHeadline = lines.first().length in 15..130
         return if (hasHeadline) text else "$originalTitle\n\n$text"
     }

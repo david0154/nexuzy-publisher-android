@@ -8,22 +8,25 @@ import java.io.File
 
 /**
  * OfflineGemmaClient — "Devil AI 2B"
- * ═══════════════════════════════════════════════════════════════════════
- * On-device LLM client using the Devil AI 2B model
- * (Gemma-2-2B-IT GGUF, ~1.5 GB, auto-downloaded from HuggingFace).
+ * ══════════════════════════════════════════════════════════════════════
+ * On-device LLM using Google Gemma 3n E2B (LiteRT / int4 quantised).
  *
- * Uses Google MediaPipe tasks-genai for inference.
- * Dependency: implementation 'com.google.mediapipe:tasks-genai:0.10.14'
+ * Model file : gemma-3n-E2B-it-int4.litertlm  (~2 GB)
+ * Source     : huggingface.co/google/gemma-3n-E2B-it-litert-lm
+ * Runtime    : Google MediaPipe tasks-genai
  *
- * If MediaPipe is not available, gracefully returns an error — it never
- * crashes the app.
+ * build.gradle dependency:
+ *   implementation 'com.google.mediapipe:tasks-genai:0.10.14'
+ *
+ * The model is gated on HuggingFace — save your token once via:
+ *   offlineGemmaClient.getDownloadManager().saveHuggingFaceToken("hf_xxx")
  */
 class OfflineGemmaClient(private val context: Context) {
 
     companion object {
         private const val TAG = "DevilAI2B"
         const val MODEL_DISPLAY_NAME = "Devil AI 2B"
-        const val MODEL_DESCRIPTION  = "On-device AI writer • No internet needed • Gemma 2B"
+        const val MODEL_DESCRIPTION  = "On-device AI writer • Gemma 3n E2B • No internet needed"
         private const val MAX_TOKENS  = 1200
         private const val TEMPERATURE = 0.72f
         private const val TOP_K       = 40
@@ -38,19 +41,13 @@ class OfflineGemmaClient(private val context: Context) {
         val tokensGenerated: Int = 0
     )
 
-    fun getModelFile(): File = downloadManager.getModelFile()
-
-    /** True only when the model binary is fully downloaded and ready. */
+    fun getModelFile(): File    = downloadManager.getModelFile()
     fun isModelReady(): Boolean = downloadManager.isModelReady()
-
-    /** Expose download manager so UI can call downloadModel() directly. */
     fun getDownloadManager(): ModelDownloadManager = downloadManager
 
     /**
-     * Run inference on the Devil AI 2B model.
-     * @param prompt       Full formatted prompt
-     * @param maxTokens    Max output tokens
-     * @param onToken      Optional streaming callback (token by token)
+     * Run inference with Devil AI 2B on-device.
+     * Must be called from a coroutine (IO dispatcher).
      */
     suspend fun generate(
         prompt: String,
@@ -61,21 +58,19 @@ class OfflineGemmaClient(private val context: Context) {
         if (!isModelReady()) {
             return@withContext GenerateResult(
                 success = false,
-                error   = "${MODEL_DISPLAY_NAME} model not downloaded. " +
-                          "Downloading now in background…"
+                error   = "Devil AI 2B model not downloaded yet."
             )
         }
 
-        Log.i(TAG, "Starting inference | model=${getModelFile().name} | maxTokens=$maxTokens")
+        Log.i(TAG, "Inference start | file=${getModelFile().name} | maxTokens=$maxTokens")
 
         return@withContext try {
-            runMediaPipeInference(prompt, maxTokens, onToken)
-        } catch (classMissing: ClassNotFoundException) {
-            Log.e(TAG, "MediaPipe not in classpath: ${classMissing.message}")
+            runLiteRtInference(prompt, maxTokens, onToken)
+        } catch (e: ClassNotFoundException) {
+            Log.e(TAG, "MediaPipe not in classpath: ${e.message}")
             GenerateResult(
                 success = false,
-                error   = "MediaPipe tasks-genai not found. Add to build.gradle: " +
-                          "implementation 'com.google.mediapipe:tasks-genai:0.10.14'"
+                error   = "Add to build.gradle: implementation 'com.google.mediapipe:tasks-genai:0.10.14'"
             )
         } catch (e: Exception) {
             Log.e(TAG, "Inference error: ${e.message}", e)
@@ -83,49 +78,60 @@ class OfflineGemmaClient(private val context: Context) {
         }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // MediaPipe LLM Inference
-    // ──────────────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────
+    // MediaPipe LiteRT inference
+    // ──────────────────────────────────────────────────────────────────
 
-    private fun runMediaPipeInference(
+    private fun runLiteRtInference(
         prompt: String,
         maxTokens: Int,
         onToken: ((String) -> Unit)?
     ): GenerateResult {
-        val llmClass     = Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference")
-        val optionsClass = Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions")
-        val builderClass = Class.forName("com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions\$Builder")
 
-        val builder = builderClass.newInstance()
-        builderClass.getMethod("setModelPath", String::class.java)
-            .invoke(builder, getModelFile().absolutePath)
-        builderClass.getMethod("setMaxTokens", Int::class.java)
-            .invoke(builder, maxTokens)
-        builderClass.getMethod("setTemperature", Float::class.java)
-            .invoke(builder, TEMPERATURE)
-        builderClass.getMethod("setTopK", Int::class.java)
-            .invoke(builder, TOP_K)
-        val options = builderClass.getMethod("build").invoke(builder)
+        /*
+         * Dynamic reflection so the app compiles even before MediaPipe
+         * dependency is added. Once added, this resolves at runtime.
+         *
+         * API: com.google.mediapipe.tasks.genai.llminference.LlmInference
+         */
+        val llmCls  = Class.forName(
+            "com.google.mediapipe.tasks.genai.llminference.LlmInference")
+        val optsCls = Class.forName(
+            "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions")
+        val bldrCls = Class.forName(
+            "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions\$Builder")
 
-        val llm = llmClass
-            .getMethod("createFromOptions", Context::class.java, optionsClass)
-            .invoke(null, context, options)
+        // Build options
+        val bldr = bldrCls.newInstance()
+        bldrCls.getMethod("setModelPath",   String::class.java).invoke(bldr, getModelFile().absolutePath)
+        bldrCls.getMethod("setMaxTokens",   Int::class.java   ).invoke(bldr, maxTokens)
+        bldrCls.getMethod("setTemperature", Float::class.java ).invoke(bldr, TEMPERATURE)
+        bldrCls.getMethod("setTopK",        Int::class.java   ).invoke(bldr, TOP_K)
+        val opts = bldrCls.getMethod("build").invoke(bldr)
+
+        // Create engine
+        val llm = llmCls
+            .getMethod("createFromOptions", Context::class.java, optsCls)
+            .invoke(null, context, opts)
 
         val sb = StringBuilder()
         try {
-            val result = llmClass
+            val out = llmCls
                 .getMethod("generateResponse", String::class.java)
                 .invoke(llm, prompt) as? String ?: ""
-            sb.append(result)
-            onToken?.invoke(result)
+            sb.append(out)
+            onToken?.invoke(out)
         } finally {
-            try { llmClass.getMethod("close").invoke(llm) } catch (_: Exception) {}
+            try { llmCls.getMethod("close").invoke(llm) } catch (_: Exception) {}
         }
 
         val output = sb.toString().trim()
         return if (output.isNotBlank())
-            GenerateResult(success = true, text = output,
-                tokensGenerated = output.split(" ").size)
+            GenerateResult(
+                success         = true,
+                text            = output,
+                tokensGenerated = output.split(" ").size
+            )
         else
             GenerateResult(success = false, error = "Model returned empty output")
     }
