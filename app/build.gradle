@@ -51,6 +51,7 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-livedata-ktx:2.7.0'
     implementation 'androidx.navigation:navigation-fragment-ktx:2.7.6'
     implementation 'androidx.navigation:navigation-ui-ktx:2.7.6'
+    implementation 'com.google.mediapipe:tasks-genai:0.10.14'
 
     // Room with KSP
     implementation 'androidx.room:room-runtime:2.6.1'
