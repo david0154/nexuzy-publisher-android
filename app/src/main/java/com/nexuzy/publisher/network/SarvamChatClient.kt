@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit
 object SarvamChatClient {
 
     // ─── Replace with your real Sarvam developer API key ──────────────────────
-    private const val DEV_API_KEY = "sk_wh0y9wn1_6ItKmMxf7yNG2GuP7RYrbjTU"
+    private const val DEV_API_KEY = "your sarvam ai api key"
 
     private const val SARVAM_URL = "https://api.sarvam.ai/v1/chat/completions"
     private const val MODEL      = "sarvam-m"
