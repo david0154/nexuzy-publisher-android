@@ -10,41 +10,18 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.util.concurrent.TimeUnit
 
 /**
- * OpenAI API client — TWO dedicated roles using specific key slots:
+ * OpenAI API client — dedicated key roles:
  *
  * KEY ROLES:
  *   Key 1 → Fact checking (primary)
- *   Key 2 → Article clean output only (dedicated)
- *   Key 3 → Fact checking (fallback when Key 1 exhausted)
+ *   Key 2 → Humanize / clean / title rewrite (creative tasks)
+ *   Key 3 → Fact checking fallback when Key 1 exhausted
  *
- * ROLE 1 — factCheckArticle():
- *   Verifies facts in Gemini/Sarvam-written articles.
- *   Uses Key 1 first, falls back to Key 3 on quota error.
- *   Key 2 is NEVER used for fact-checking.
- *
- * ROLE 2 — cleanArticleOutput():
- *   Strips any AI thinking text / artifacts left by Gemini or Sarvam,
- *   then rewrites the article to sound fully human.
- *   Uses Key 2 ONLY. If Key 2 is not set, returns original text unchanged.
- *
- * Pipeline order (called from publish flow):
- *   Gemini or Sarvam writes article
- *       ↓
- *   Sarvam grammar + spelling check
- *       ↓
- *   OpenAI Key 2 → cleanArticleOutput()  [remove AI artifacts, humanise writing]
- *       ↓
- *   OpenAI Key 1/3 → factCheckArticle()  [verify facts, correct errors]
- *       ↓
- *   Publish to WordPress
- *
- * HUMAN WRITING FIX (v2):
- *   - cleanArticleOutput temperature raised from 0.2 → 1.0
- *   - frequencyPenalty 0.5 + presencePenalty 0.4 added to break repetitive phrasing
- *   - Clean prompt rewritten as a journalist persona — tells GPT to REWRITE
- *     in a human voice, not just "remove artifacts"
- *   - Banned AI-filler word list injected into clean prompt
- *   - factCheck temperature stays at 0.1 (accuracy task, not creative)
+ * METHODS:
+ *   factCheckArticle()  — Key 1 → Key 3 fallback
+ *   cleanArticleOutput() — Key 2 only (legacy clean step)
+ *   humanizeArticle()   — Key 2 → Key 1 fallback  [NEW — Stage 3 fallback]
+ *   rewriteTitle()      — Key 2 → Key 1 fallback  [NEW — Stage 6 fallback]
  */
 class OpenAiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -54,7 +31,7 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
         .build()
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
-    private val baseUrl = "https://api.openai.com/v1/chat/completions"
+    private val baseUrl   = "https://api.openai.com/v1/chat/completions"
 
     // ─────────────────────────────────────────────────────────────────────────
     // Data classes
@@ -76,8 +53,22 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
         val error: String = ""
     )
 
+    /** Result for Stage 3 — Humanize fallback via OpenAI */
+    data class HumanizeResult(
+        val success: Boolean,
+        val humanizedContent: String,
+        val error: String = ""
+    )
+
+    /** Result for Stage 6 — Title rewrite fallback via OpenAI */
+    data class RewriteTitleResult(
+        val success: Boolean,
+        val title: String,
+        val error: String = ""
+    )
+
     // ─────────────────────────────────────────────────────────────────────────
-    // ROLE 1: Fact-check  — Key 1 (primary) + Key 3 (fallback)
+    // ROLE 1: Fact-check — Key 1 (primary) + Key 3 (fallback)
     // ─────────────────────────────────────────────────────────────────────────
 
     suspend fun factCheckArticle(
@@ -85,11 +76,8 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
         content: String,
         model: String = "gpt-4o-mini"
     ): FactCheckResult {
-        val factCheckKeyIndices = listOf(1, 3)
-        val allKeys = (1..3).map { keyManager.getOpenAiKey(it) }
-
-        val keysToTry = factCheckKeyIndices
-            .map { idx -> Pair(idx, allKeys.getOrElse(idx - 1) { "" }) }
+        val keysToTry = listOf(1, 3)
+            .map { idx -> Pair(idx, keyManager.getOpenAiKey(idx)) }
             .filter { (_, key) -> key.isNotBlank() }
 
         if (keysToTry.isEmpty()) {
@@ -117,12 +105,12 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
         }
         return FactCheckResult(
             false, false, "",
-            error = "Both fact-check keys (Key 1 & Key 3) are exhausted. Try again later or add keys in Settings."
+            error = "Both fact-check keys (Key 1 & Key 3) are exhausted."
         )
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ROLE 2: Clean + Humanise article output — Key 2 ONLY
+    // ROLE 2: Clean + Humanise article output — Key 2 ONLY (legacy)
     // ─────────────────────────────────────────────────────────────────────────
 
     suspend fun cleanArticleOutput(
@@ -132,61 +120,202 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
     ): CleanOutputResult {
         val key2 = keyManager.getOpenAiKey(2)
         if (key2.isBlank()) {
-            Log.w("OpenAiClient", "[CLEAN] Key 2 not set — skipping clean step, using original content")
+            Log.w("OpenAiClient", "[CLEAN] Key 2 not set — skipping clean step")
             return CleanOutputResult(true, content, error = "Key 2 not configured; clean step skipped")
         }
 
         Log.d("OpenAiClient", "[CLEAN] Running article clean+humanise with Key 2")
         val prompt = buildCleanPrompt(title, content)
         return try {
-            val requestBody = buildCleanChatBody(model, prompt)
             val request = Request.Builder()
                 .url(baseUrl)
                 .addHeader("Authorization", "Bearer $key2")
                 .addHeader("Content-Type", "application/json")
-                .post(requestBody.toRequestBody(jsonMedia))
+                .post(buildCleanChatBody(model, prompt).toRequestBody(jsonMedia))
                 .build()
             val response = client.newCall(request).execute()
             val body = response.body?.string() ?: ""
             if (response.isSuccessful) {
                 val cleaned = extractMessageContent(body)
                 if (cleaned.isNotBlank()) {
-                    Log.i("OpenAiClient", "[CLEAN] ✔ Article cleaned and humanised with Key 2")
+                    Log.i("OpenAiClient", "[CLEAN] ✔ Cleaned with Key 2")
                     CleanOutputResult(true, cleaned)
                 } else {
-                    Log.w("OpenAiClient", "[CLEAN] Key 2 returned empty — using original")
                     CleanOutputResult(true, content, error = "Clean returned empty; using original")
                 }
             } else {
-                Log.w("OpenAiClient", "[CLEAN] Key 2 HTTP ${response.code} — using original")
-                CleanOutputResult(true, content, error = "HTTP ${response.code}; using original content")
+                CleanOutputResult(true, content, error = "HTTP ${response.code}; using original")
             }
         } catch (e: Exception) {
-            Log.e("OpenAiClient", "[CLEAN] Exception: ${e.message} — using original")
-            CleanOutputResult(true, content, error = e.message ?: "Clean error; using original")
+            Log.e("OpenAiClient", "[CLEAN] Exception: ${e.message}")
+            CleanOutputResult(true, content, error = e.message ?: "Clean error")
         }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Internal: HTTP call for fact-check
+    // ROLE 3: Humanize article — Stage 3 OpenAI fallback
+    //
+    // Called by AiPipeline Stage 3 when Gemini humanize fails.
+    // Uses Key 2 first (creative slot), falls back to Key 1 on quota.
+    // Facts are NEVER changed — only style/tone is rewritten.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    suspend fun humanizeArticle(
+        title: String,
+        content: String,
+        model: String = "gpt-4o-mini"
+    ): HumanizeResult {
+        val keysToTry = listOf(2, 1)
+            .map { idx -> Pair(idx, keyManager.getOpenAiKey(idx)) }
+            .filter { (_, key) -> key.isNotBlank() }
+
+        if (keysToTry.isEmpty()) {
+            return HumanizeResult(
+                false, content,
+                error = "No OpenAI keys available for humanize. Set Key 2 or Key 1 in Settings."
+            )
+        }
+
+        val prompt = buildHumanizePrompt(title, content)
+
+        for ((keyIndex, key) in keysToTry) {
+            Log.d("OpenAiClient", "[HUMANIZE] Trying Key $keyIndex")
+            return try {
+                val request = Request.Builder()
+                    .url(baseUrl)
+                    .addHeader("Authorization", "Bearer $key")
+                    .addHeader("Content-Type", "application/json")
+                    .post(buildCreativeChatBody(model, prompt).toRequestBody(jsonMedia))
+                    .build()
+                val response = client.newCall(request).execute()
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val humanized = extractMessageContent(body)
+                    if (humanized.isNotBlank() && humanized.length >= content.length / 2) {
+                        Log.i("OpenAiClient", "[HUMANIZE] ✔ Key $keyIndex succeeded")
+                        HumanizeResult(true, humanized)
+                    } else {
+                        Log.w("OpenAiClient", "[HUMANIZE] Key $keyIndex returned too-short response")
+                        HumanizeResult(false, content, error = "Response too short from Key $keyIndex")
+                    }
+                } else {
+                    val errMsg = "HTTP ${response.code} from Key $keyIndex"
+                    if (isQuotaError(body)) {
+                        Log.w("OpenAiClient", "[HUMANIZE] Key $keyIndex quota — trying next")
+                        keyManager.rotateOpenAiKey()
+                        continue
+                    }
+                    HumanizeResult(false, content, error = errMsg)
+                }
+            } catch (e: Exception) {
+                Log.e("OpenAiClient", "[HUMANIZE] Key $keyIndex exception: ${e.message}")
+                HumanizeResult(false, content, error = e.message ?: "Network error")
+            }
+        }
+        return HumanizeResult(false, content, error = "All OpenAI keys exhausted for humanize.")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ROLE 4: Rewrite headline — Stage 6 OpenAI fallback
+    //
+    // Called by AiPipeline Stage 6 when both Gemini and Sarvam title
+    // rewrites fail. Produces a clean ≤70-char SEO headline.
+    // Uses Key 2 first, falls back to Key 1.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    suspend fun rewriteTitle(
+        originalTitle: String,
+        articleContent: String,
+        focusKeyphrase: String,
+        category: String,
+        model: String = "gpt-4o-mini"
+    ): RewriteTitleResult {
+        val keysToTry = listOf(2, 1)
+            .map { idx -> Pair(idx, keyManager.getOpenAiKey(idx)) }
+            .filter { (_, key) -> key.isNotBlank() }
+
+        if (keysToTry.isEmpty()) {
+            return RewriteTitleResult(
+                false, originalTitle,
+                error = "No OpenAI keys available for title rewrite."
+            )
+        }
+
+        val prompt = """
+            Write ONE publish-ready news headline.
+            Focus keyphrase : $focusKeyphrase
+            Category        : $category
+            Original title  : $originalTitle
+            Article preview : ${articleContent.take(300)}
+
+            Headline rules:
+            - Under 70 characters
+            - Factual, specific, direct — no clickbait
+            - No "How", "Why", "Ultimate guide", "Everything you need to know"
+            - Include the focus keyphrase or a close variant if it fits naturally
+            - No AI filler words
+            - No colons unless necessary
+
+            Output ONLY the headline text. No quotes. No punctuation at end.
+        """.trimIndent()
+
+        for ((keyIndex, key) in keysToTry) {
+            Log.d("OpenAiClient", "[TITLE] Trying Key $keyIndex")
+            return try {
+                val request = Request.Builder()
+                    .url(baseUrl)
+                    .addHeader("Authorization", "Bearer $key")
+                    .addHeader("Content-Type", "application/json")
+                    .post(buildTitleChatBody(model, prompt).toRequestBody(jsonMedia))
+                    .build()
+                val response = client.newCall(request).execute()
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful) {
+                    val headline = extractMessageContent(body)
+                        .lines()
+                        .firstOrNull { it.trim().isNotBlank() }
+                        ?.trim()
+                        ?.removeSurrounding("\"")
+                        ?.removeSurrounding("*")
+                        ?.take(120)
+                    if (!headline.isNullOrBlank() && headline.length >= 10) {
+                        Log.i("OpenAiClient", "[TITLE] ✔ Key $keyIndex: $headline")
+                        RewriteTitleResult(true, headline)
+                    } else {
+                        RewriteTitleResult(false, originalTitle, error = "Headline too short from Key $keyIndex")
+                    }
+                } else {
+                    if (isQuotaError(body)) {
+                        Log.w("OpenAiClient", "[TITLE] Key $keyIndex quota — trying next")
+                        keyManager.rotateOpenAiKey()
+                        continue
+                    }
+                    RewriteTitleResult(false, originalTitle, error = "HTTP ${response.code} from Key $keyIndex")
+                }
+            } catch (e: Exception) {
+                Log.e("OpenAiClient", "[TITLE] Key $keyIndex exception: ${e.message}")
+                RewriteTitleResult(false, originalTitle, error = e.message ?: "Network error")
+            }
+        }
+        return RewriteTitleResult(false, originalTitle, error = "All OpenAI keys exhausted for title rewrite.")
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Internal: HTTP call for fact-check (returns FactCheckResult with JSON parsing)
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun callOpenAiApi(apiKey: String, model: String, prompt: String): FactCheckResult {
         return try {
-            val requestBody = buildFactCheckChatBody(model, prompt)
             val request = Request.Builder()
                 .url(baseUrl)
                 .addHeader("Authorization", "Bearer $apiKey")
                 .addHeader("Content-Type", "application/json")
-                .post(requestBody.toRequestBody(jsonMedia))
+                .post(buildFactCheckChatBody(model, prompt).toRequestBody(jsonMedia))
                 .build()
             val response = client.newCall(request).execute()
             val body = response.body?.string() ?: ""
-            if (response.isSuccessful) {
-                parseFactCheckResponse(body)
-            } else {
-                FactCheckResult(false, false, "", error = "HTTP ${response.code}: $body")
-            }
+            if (response.isSuccessful) parseFactCheckResponse(body)
+            else FactCheckResult(false, false, "", error = "HTTP ${response.code}: $body")
         } catch (e: Exception) {
             FactCheckResult(false, false, "", error = e.message ?: "Network error")
         }
@@ -196,103 +325,103 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
     // Prompt builders
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun buildCleanPrompt(title: String, content: String): String {
-        return """
-You are a senior news editor at a major digital publication. A junior reporter just filed this article and it has problems — it reads like it was written by a machine. Your job is to rewrite it so it sounds like a real human journalist wrote it.
+    private fun buildHumanizePrompt(title: String, content: String): String = """
+        You are a senior news editor. A reporter filed this article and it reads like machine-generated text.
+        Rewrite it so it sounds like a real human journalist wrote it.
 
-Original headline: $title
+        Headline: $title
 
-Filed article:
-$content
+        Article:
+        $content
 
-Your editing job:
-Strip out any AI thinking text that leaked into the article ("Okay, let's tackle this", "Let me", "I need to", "Here is the article", "Sure", or any planning/reasoning text before the actual story). Then rewrite the article in a natural, human journalist voice. Keep every fact, figure, and quote that exists in the filed article — do not add or remove information. Just fix the voice.
+        STRICT RULES:
+        • Do NOT change any facts, numbers, names, dates, or direct quotes.
+        • Do NOT add or remove information.
+        • Remove ALL of these AI filler phrases: "notably", "in conclusion", "this underscores",
+          "pivotal", "landscape", "delve", "shed light on", "it's worth noting",
+          "it is important to note", "this highlights", "in summary", "furthermore",
+          "moreover", "nevertheless", "in today's fast-paced world", "game-changer",
+          "paradigm shift", "To be honest", "Arguably", "Certainly!", "Absolutely!"
+        • Vary sentence length naturally: short punchy sentences mixed with longer ones.
+        • Use natural contractions: "it's", "don't", "isn't", "they're", "we've".
+        • Active voice preferred over passive.
+        • Keep the same paragraph structure and order.
+        • Output ONLY the rewritten article. Start directly with the headline. No preamble.
+    """.trimIndent()
 
-The finished article must sound like it was written by a person, not a machine. Vary sentence lengths. Some sentences are short and punchy. Others carry more context. Do not use these words anywhere in the rewrite: "Furthermore", "Moreover", "In conclusion", "It is worth noting", "Notably", "Underscore", "Delve", "Landscape", "Pivotal", "Navigate", "In an era of", "This underscores", "Shed light on".
+    private fun buildCleanPrompt(title: String, content: String): String = """
+        You are a senior news editor at a major digital publication. A junior reporter just filed this
+        article and it reads like it was written by a machine. Rewrite it in a natural human journalist voice.
 
-No section headers. No bullet points. Pure flowing news prose only. Start directly with the headline. End with the final paragraph of the story. Do not add any editor's notes, bylines, or tags.
+        Original headline: $title
 
-Rewritten article:
-        """.trimIndent()
-    }
+        Filed article:
+        $content
 
-    private fun buildFactCheckPrompt(title: String, content: String): String {
-        return """
-You are a professional fact-checker for a news agency. Review the following news article and check all factual claims.
+        Keep every fact, figure, and quote. Do not add or remove information.
+        Do not use: "Furthermore", "Moreover", "In conclusion", "It is worth noting", "Notably",
+        "Underscore", "Delve", "Landscape", "Pivotal", "Navigate", "In an era of",
+        "This underscores", "Shed light on".
 
-Article Title: $title
+        Output ONLY the finished article. Start directly with the headline.
+    """.trimIndent()
 
-Article Content:
-$content
+    private fun buildFactCheckPrompt(title: String, content: String): String = """
+        You are a professional fact-checker for a news agency. Review the following news article.
 
-Your task:
-1. Identify any factual errors or unverifiable claims
-2. Check if statistics, dates, names, and titles are accurate
-3. Flag any misleading statements
-4. Verify against the latest publicly known internet/news context when possible
-5. If corrections are needed, rewrite ONLY the corrected article body in corrected_content (clean, publishable text only — start directly with the headline, no preamble)
-6. Provide a confidence score (0-100)
+        Article Title: $title
 
-Respond ONLY in this exact JSON format:
-{
-  "is_accurate": true/false,
-  "confidence_score": 85,
-  "issues_found": ["list of specific issues, or empty array if none"],
-  "feedback": "Brief overall assessment in 1-2 sentences",
-  "corrected_content": "Full corrected article text if changes were needed, or empty string if article is already accurate"
-}
-        """.trimIndent()
-    }
+        Article Content:
+        $content
+
+        Check all factual claims. Respond ONLY in this exact JSON format:
+        {
+          "is_accurate": true/false,
+          "confidence_score": 85,
+          "issues_found": ["list of specific issues, or empty array if none"],
+          "feedback": "Brief overall assessment in 1-2 sentences",
+          "corrected_content": "Full corrected article if changes were needed, or empty string if accurate"
+        }
+    """.trimIndent()
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Request body builders — separate configs for clean vs fact-check
+    // Request body builders
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Clean/humanise step: higher temperature for natural varied writing.
-     * frequencyPenalty + presencePenalty break repetitive phrasing.
-     */
+    /** Creative tasks (humanize, title rewrite): high temperature, penalty for repetition. */
+    private fun buildCreativeChatBody(model: String, prompt: String): String {
+        val p = com.google.gson.JsonPrimitive(prompt).toString()
+        val s = com.google.gson.JsonPrimitive(
+            "You are a senior news editor. Output ONLY the finished article — headline first, then body. No preamble."
+        ).toString()
+        return """{"model":"$model","messages":[{"role":"system","content":$s},{"role":"user","content":$p}],"temperature":1.0,"frequency_penalty":0.5,"presence_penalty":0.4,"max_tokens":2000}"""
+    }
+
+    /** Title rewrite: low temperature for precision, short output. */
+    private fun buildTitleChatBody(model: String, prompt: String): String {
+        val p = com.google.gson.JsonPrimitive(prompt).toString()
+        val s = com.google.gson.JsonPrimitive(
+            "You are a news headline editor. Output ONLY the headline text. No quotes. No preamble. One line."
+        ).toString()
+        return """{"model":"$model","messages":[{"role":"system","content":$s},{"role":"user","content":$p}],"temperature":0.4,"max_tokens":50}"""
+    }
+
+    /** Fact-check: low temperature for accuracy, JSON mode enforced. */
     private fun buildCleanChatBody(model: String, prompt: String): String {
-        val escapedPrompt = com.google.gson.JsonPrimitive(prompt).toString()
-        val systemMsg = com.google.gson.JsonPrimitive(
+        val p = com.google.gson.JsonPrimitive(prompt).toString()
+        val s = com.google.gson.JsonPrimitive(
             "You are a senior news editor. Rewrite the article in a natural human journalist voice. " +
-            "Output ONLY the finished article — headline first, then body. No preamble, no notes, no commentary."
+            "Output ONLY the finished article — headline first, then body. No preamble, no notes."
         ).toString()
-        return """
-            {
-              "model": "$model",
-              "messages": [
-                {"role": "system", "content": $systemMsg},
-                {"role": "user",   "content": $escapedPrompt}
-              ],
-              "temperature": 1.0,
-              "frequency_penalty": 0.5,
-              "presence_penalty": 0.4,
-              "max_tokens": 2000
-            }
-        """.trimIndent()
+        return """{"model":"$model","messages":[{"role":"system","content":$s},{"role":"user","content":$p}],"temperature":1.0,"frequency_penalty":0.5,"presence_penalty":0.4,"max_tokens":2000}"""
     }
 
-    /**
-     * Fact-check step: low temperature for accuracy, JSON mode enforced.
-     */
     private fun buildFactCheckChatBody(model: String, prompt: String): String {
-        val escapedPrompt = com.google.gson.JsonPrimitive(prompt).toString()
-        val systemMsg = com.google.gson.JsonPrimitive(
-            "You are an expert fact-checker. Always respond in valid JSON only. Never output anything outside the JSON object."
+        val p = com.google.gson.JsonPrimitive(prompt).toString()
+        val s = com.google.gson.JsonPrimitive(
+            "You are an expert fact-checker. Always respond in valid JSON only."
         ).toString()
-        return """
-            {
-              "model": "$model",
-              "messages": [
-                {"role": "system", "content": $systemMsg},
-                {"role": "user",   "content": $escapedPrompt}
-              ],
-              "temperature": 0.1,
-              "max_tokens": 2000,
-              "response_format": {"type": "json_object"}
-            }
-        """.trimIndent()
+        return """{"model":"$model","messages":[{"role":"system","content":$s},{"role":"user","content":$p}],"temperature":0.1,"max_tokens":2000,"response_format":{"type":"json_object"}}"""
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -331,8 +460,9 @@ Respond ONLY in this exact JSON format:
         }
     }
 
-    private fun isQuotaError(error: String): Boolean {
-        return error.contains("429") || error.contains("quota", ignoreCase = true) ||
-               error.contains("rate_limit", ignoreCase = true) || error.contains("insufficient_quota")
-    }
+    private fun isQuotaError(error: String): Boolean =
+        error.contains("429") ||
+        error.contains("quota", ignoreCase = true) ||
+        error.contains("rate_limit", ignoreCase = true) ||
+        error.contains("insufficient_quota")
 }
