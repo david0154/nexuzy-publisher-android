@@ -99,11 +99,11 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1'
 
     // ----------------------------------------------------------------
-    // 😈 Devil AI 2B — LiteRT-LM (Gemma 3n E2B on-device inference)
+    // Devil AI 2B - LiteRT-LM (Gemma 3n E2B on-device inference)
     // Source: github.com/google-ai-edge/LiteRT-LM
-    // Requires JitPack repo (see settings.gradle / project build.gradle)
+    // Requires JitPack repo (added in settings.gradle)
     // ----------------------------------------------------------------
-    implementation 'com.github.google-ai-edge:LiteRT-LM:latest'
+    implementation 'com.github.google-ai-edge:LiteRT-LM:1.0.1'
 
     // ----------------------------------------------------------------
     // Testing
