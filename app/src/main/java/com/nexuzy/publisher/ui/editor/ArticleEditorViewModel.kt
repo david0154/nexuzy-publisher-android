@@ -13,22 +13,17 @@ data class EditorPipelineState(
     val loading: Boolean = false,
     val statusText: String = "",
     val finalContent: String = "",
-    // Rewritten title from Gemini SEO keyphrase
     val rewrittenTitle: String = "",
     val factFeedback: String = "",
-    val geminiDone: Boolean = false,
     val openAiDone: Boolean = false,
     val sarvamDone: Boolean = false,
     val seoDone: Boolean = false,
-    // SEO fields — all come from Gemini Step 4
     val tags: String = "",
     val metaKeywords: String = "",
     val focusKeyphrase: String = "",
     val metaDescription: String = "",
-    // Image fields — remote URL from RSS + local downloaded path
     val imageUrl: String = "",
     val imagePath: String = "",
-    // Fact check
     val factCheckPassed: Boolean = false,
     val confidenceScore: Float = 0f,
     val error: String = ""
@@ -42,7 +37,7 @@ class ArticleEditorViewModel(application: Application) : AndroidViewModel(applic
     val pipelineState: LiveData<EditorPipelineState> = _pipelineState
 
     fun runPipeline(rssItem: RssItem) {
-        _pipelineState.value = EditorPipelineState(loading = true, statusText = "📝 Gemini is writing…")
+        _pipelineState.value = EditorPipelineState(loading = true, statusText = "📝 AI pipeline starting…")
 
         viewModelScope.launch {
             val result = pipeline.processRssItem(rssItem) { progress ->
@@ -59,33 +54,31 @@ class ArticleEditorViewModel(application: Application) : AndroidViewModel(applic
                 val article = result.article
                 _pipelineState.postValue(
                     EditorPipelineState(
-                        loading = false,
-                        statusText = buildStatusText(result),
-                        finalContent = result.finalContent,
+                        loading        = false,
+                        statusText     = buildStatusText(result),
+                        finalContent   = result.finalContent,
                         rewrittenTitle = result.title,
-                        factFeedback = result.factCheckFeedback,
-                        geminiDone = result.geminiDone,
-                        openAiDone = result.openAiDone,
-                        sarvamDone = result.sarvamDone,
-                        seoDone = result.seoDone,
-                        tags = article?.tags ?: "",
-                        metaKeywords = article?.metaKeywords ?: "",
+                        factFeedback   = result.factCheckFeedback,
+                        openAiDone     = result.openAiDone,
+                        sarvamDone     = result.sarvamDone,
+                        seoDone        = result.seoDone,
+                        tags           = article?.tags ?: "",
+                        metaKeywords   = article?.metaKeywords ?: "",
                         focusKeyphrase = article?.focusKeyphrase ?: "",
                         metaDescription = article?.metaDescription ?: "",
-                        // Image: prefer local downloaded path, fall back to remote RSS imageUrl
-                        imageUrl = article?.imageUrl ?: rssItem.imageUrl,
-                        imagePath = article?.imagePath ?: "",
+                        imageUrl       = article?.imageUrl ?: rssItem.imageUrl,
+                        imagePath      = article?.imagePath ?: "",
                         factCheckPassed = result.factCheckPassed,
                         confidenceScore = result.confidenceScore,
-                        error = ""
+                        error          = ""
                     )
                 )
             } else {
                 _pipelineState.postValue(
                     EditorPipelineState(
-                        loading = false,
+                        loading    = false,
                         statusText = "❌ ${result.error}",
-                        error = result.error
+                        error      = result.error
                     )
                 )
             }
@@ -93,10 +86,11 @@ class ArticleEditorViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun buildStatusText(result: AiPipeline.PipelineResult): String {
-        val score = result.confidenceScore.toInt()
+        val score  = (result.confidenceScore * 100).toInt()
         val seoTag = if (result.seoDone) " | SEO ✅" else " | SEO ⚠️"
-        val imgTag = if ((result.article?.imagePath ?: "").isNotBlank()) " | 🖼️ Image" else
-            if ((result.article?.imageUrl ?: "").isNotBlank()) " | 🖼️ RSS img" else ""
+        val imgTag = if ((result.article?.imagePath ?: "").isNotBlank()) " | 🖼️ Image"
+                     else if ((result.article?.imageUrl ?: "").isNotBlank()) " | 🖼️ RSS img"
+                     else ""
         return "✅ Done! Fact: $score%$seoTag$imgTag"
     }
 }
