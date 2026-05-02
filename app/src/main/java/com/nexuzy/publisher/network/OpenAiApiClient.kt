@@ -23,7 +23,8 @@ import java.util.concurrent.TimeUnit
  *   Key 2 is NEVER used for fact-checking.
  *
  * ROLE 2 — cleanArticleOutput():
- *   Cleans and polishes the final article text before WordPress publish.
+ *   Strips any AI thinking text / artifacts left by Gemini or Sarvam,
+ *   then rewrites the article to sound fully human.
  *   Uses Key 2 ONLY. If Key 2 is not set, returns original text unchanged.
  *
  * Pipeline order (called from publish flow):
@@ -31,11 +32,19 @@ import java.util.concurrent.TimeUnit
  *       ↓
  *   Sarvam grammar + spelling check
  *       ↓
- *   OpenAI Key 2 → cleanArticleOutput()  [remove AI artifacts, fix formatting]
+ *   OpenAI Key 2 → cleanArticleOutput()  [remove AI artifacts, humanise writing]
  *       ↓
  *   OpenAI Key 1/3 → factCheckArticle()  [verify facts, correct errors]
  *       ↓
  *   Publish to WordPress
+ *
+ * HUMAN WRITING FIX (v2):
+ *   - cleanArticleOutput temperature raised from 0.2 → 1.0
+ *   - frequencyPenalty 0.5 + presencePenalty 0.4 added to break repetitive phrasing
+ *   - Clean prompt rewritten as a journalist persona — tells GPT to REWRITE
+ *     in a human voice, not just "remove artifacts"
+ *   - Banned AI-filler word list injected into clean prompt
+ *   - factCheck temperature stays at 0.1 (accuracy task, not creative)
  */
 class OpenAiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -71,17 +80,11 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
     // ROLE 1: Fact-check  — Key 1 (primary) + Key 3 (fallback)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Fact-check an article.
-     * Uses Key 1 first. If quota exceeded, falls back to Key 3.
-     * Key 2 is intentionally skipped — it is reserved for clean output only.
-     */
     suspend fun factCheckArticle(
         title: String,
         content: String,
         model: String = "gpt-4o-mini"
     ): FactCheckResult {
-        // Key slots for fact-checking: 1 and 3 (skip 2)
         val factCheckKeyIndices = listOf(1, 3)
         val allKeys = (1..3).map { keyManager.getOpenAiKey(it) }
 
@@ -119,17 +122,9 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ROLE 2: Clean article output — Key 2 ONLY
+    // ROLE 2: Clean + Humanise article output — Key 2 ONLY
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Clean and polish the article text using Key 2 exclusively.
-     * Removes any remaining AI preamble, thinking text, duplicate lines,
-     * and formatting artifacts before the article is fact-checked and published.
-     *
-     * If Key 2 is not configured, returns the original content unchanged
-     * (non-blocking — cleaning is best-effort).
-     */
     suspend fun cleanArticleOutput(
         title: String,
         content: String,
@@ -141,11 +136,10 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
             return CleanOutputResult(true, content, error = "Key 2 not configured; clean step skipped")
         }
 
-        Log.d("OpenAiClient", "[CLEAN] Running article clean with Key 2")
+        Log.d("OpenAiClient", "[CLEAN] Running article clean+humanise with Key 2")
         val prompt = buildCleanPrompt(title, content)
         return try {
-            val requestBody = buildChatBody(model, prompt,
-                systemPrompt = "You are a professional news editor. Output only clean, publishable article text. Never add commentary, preamble, or notes.")
+            val requestBody = buildCleanChatBody(model, prompt)
             val request = Request.Builder()
                 .url(baseUrl)
                 .addHeader("Authorization", "Bearer $key2")
@@ -157,7 +151,7 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
             if (response.isSuccessful) {
                 val cleaned = extractMessageContent(body)
                 if (cleaned.isNotBlank()) {
-                    Log.i("OpenAiClient", "[CLEAN] ✔ Article cleaned with Key 2")
+                    Log.i("OpenAiClient", "[CLEAN] ✔ Article cleaned and humanised with Key 2")
                     CleanOutputResult(true, cleaned)
                 } else {
                     Log.w("OpenAiClient", "[CLEAN] Key 2 returned empty — using original")
@@ -179,11 +173,7 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
 
     private fun callOpenAiApi(apiKey: String, model: String, prompt: String): FactCheckResult {
         return try {
-            val requestBody = buildChatBody(
-                model, prompt,
-                systemPrompt = "You are an expert fact-checker. Always respond in valid JSON only. Never output anything outside the JSON object.",
-                jsonMode = true
-            )
+            val requestBody = buildFactCheckChatBody(model, prompt)
             val request = Request.Builder()
                 .url(baseUrl)
                 .addHeader("Authorization", "Bearer $apiKey")
@@ -206,92 +196,101 @@ class OpenAiApiClient(private val keyManager: ApiKeyManager) {
     // Prompt builders
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun buildFactCheckPrompt(title: String, content: String): String {
-        return """
-            CRITICAL OUTPUT RULES:
-            - Respond ONLY with the JSON object specified below. Nothing before it, nothing after it.
-            - If corrected_content is needed, output ONLY the clean corrected article text.
-            - Do NOT include any thinking, reasoning, planning, or commentary in corrected_content.
-            - Do NOT start corrected_content with "Okay", "Let me", "Here is", "I have", "Sure", or any preamble.
-            - corrected_content must begin directly with the article headline and end with the last article paragraph.
-            - corrected_content must contain ONLY the publishable article — no meta-text, no notes, no explanations.
-
-            You are a professional fact-checker for a news agency. Review the following news article and check all factual claims.
-
-            Article Title: $title
-
-            Article Content:
-            $content
-
-            Your task:
-            1. Identify any factual errors or unverifiable claims
-            2. Check if statistics, dates, names, and titles are accurate
-            3. Flag any misleading statements
-            4. Verify against the latest publicly known internet/news context when possible
-            5. If corrections are needed, rewrite ONLY the corrected article body in corrected_content (clean, publishable text only)
-            6. Provide a confidence score (0-100)
-
-            Respond ONLY in this exact JSON format:
-            {
-              "is_accurate": true/false,
-              "confidence_score": 85,
-              "issues_found": ["list of specific issues, or empty array if none"],
-              "feedback": "Brief overall assessment in 1-2 sentences",
-              "corrected_content": "Full corrected article text if changes were needed, or empty string if article is already accurate"
-            }
-        """.trimIndent()
-    }
-
     private fun buildCleanPrompt(title: String, content: String): String {
         return """
-            CRITICAL OUTPUT RULES:
-            - Output ONLY the cleaned article text. Nothing before it. Nothing after it.
-            - Do NOT add any commentary, notes, or explanations.
-            - Do NOT start with "Okay", "Here is", "Sure", "I have cleaned", or any preamble.
-            - Begin your response IMMEDIATELY with the article headline.
-            - End your response with the last paragraph of the article.
+You are a senior news editor at a major digital publication. A junior reporter just filed this article and it has problems — it reads like it was written by a machine. Your job is to rewrite it so it sounds like a real human journalist wrote it.
 
-            You are a professional news editor. Clean and polish the following article:
+Original headline: $title
 
-            Article Title: $title
+Filed article:
+$content
 
-            Article Content:
-            $content
+Your editing job:
+Strip out any AI thinking text that leaked into the article ("Okay, let's tackle this", "Let me", "I need to", "Here is the article", "Sure", or any planning/reasoning text before the actual story). Then rewrite the article in a natural, human journalist voice. Keep every fact, figure, and quote that exists in the filed article — do not add or remove information. Just fix the voice.
 
-            Cleaning tasks:
-            1. Remove any AI thinking text, preamble, or meta-commentary (e.g. "Okay, let me write...", "Here is the article:", "I need to...")
-            2. Remove any duplicate headlines or repeated paragraphs
-            3. Remove any bylines, image captions, or photo credit lines
-            4. Fix any obvious formatting issues (double spaces, broken paragraphs)
-            5. Preserve ALL original facts, quotes, and information — do NOT change the content
-            6. Keep the article length the same — do NOT summarise or shorten
+The finished article must sound like it was written by a person, not a machine. Vary sentence lengths. Some sentences are short and punchy. Others carry more context. Do not use these words anywhere in the rewrite: "Furthermore", "Moreover", "In conclusion", "It is worth noting", "Notably", "Underscore", "Delve", "Landscape", "Pivotal", "Navigate", "In an era of", "This underscores", "Shed light on".
 
-            Output the cleaned article now (headline first, then body paragraphs):
+No section headers. No bullet points. Pure flowing news prose only. Start directly with the headline. End with the final paragraph of the story. Do not add any editor's notes, bylines, or tags.
+
+Rewritten article:
+        """.trimIndent()
+    }
+
+    private fun buildFactCheckPrompt(title: String, content: String): String {
+        return """
+You are a professional fact-checker for a news agency. Review the following news article and check all factual claims.
+
+Article Title: $title
+
+Article Content:
+$content
+
+Your task:
+1. Identify any factual errors or unverifiable claims
+2. Check if statistics, dates, names, and titles are accurate
+3. Flag any misleading statements
+4. Verify against the latest publicly known internet/news context when possible
+5. If corrections are needed, rewrite ONLY the corrected article body in corrected_content (clean, publishable text only — start directly with the headline, no preamble)
+6. Provide a confidence score (0-100)
+
+Respond ONLY in this exact JSON format:
+{
+  "is_accurate": true/false,
+  "confidence_score": 85,
+  "issues_found": ["list of specific issues, or empty array if none"],
+  "feedback": "Brief overall assessment in 1-2 sentences",
+  "corrected_content": "Full corrected article text if changes were needed, or empty string if article is already accurate"
+}
         """.trimIndent()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Request body builders
+    // Request body builders — separate configs for clean vs fact-check
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun buildChatBody(
-        model: String,
-        prompt: String,
-        systemPrompt: String,
-        jsonMode: Boolean = false
-    ): String {
-        val escapedPrompt  = com.google.gson.JsonPrimitive(prompt).toString()
-        val escapedSystem  = com.google.gson.JsonPrimitive(systemPrompt).toString()
-        val responseFormat = if (jsonMode) ",\n  \"response_format\": {\"type\": \"json_object\"}" else ""
+    /**
+     * Clean/humanise step: higher temperature for natural varied writing.
+     * frequencyPenalty + presencePenalty break repetitive phrasing.
+     */
+    private fun buildCleanChatBody(model: String, prompt: String): String {
+        val escapedPrompt = com.google.gson.JsonPrimitive(prompt).toString()
+        val systemMsg = com.google.gson.JsonPrimitive(
+            "You are a senior news editor. Rewrite the article in a natural human journalist voice. " +
+            "Output ONLY the finished article — headline first, then body. No preamble, no notes, no commentary."
+        ).toString()
         return """
             {
               "model": "$model",
               "messages": [
-                {"role": "system", "content": $escapedSystem},
+                {"role": "system", "content": $systemMsg},
                 {"role": "user",   "content": $escapedPrompt}
               ],
-              "temperature": 0.2,
-              "max_tokens": 2000$responseFormat
+              "temperature": 1.0,
+              "frequency_penalty": 0.5,
+              "presence_penalty": 0.4,
+              "max_tokens": 2000
+            }
+        """.trimIndent()
+    }
+
+    /**
+     * Fact-check step: low temperature for accuracy, JSON mode enforced.
+     */
+    private fun buildFactCheckChatBody(model: String, prompt: String): String {
+        val escapedPrompt = com.google.gson.JsonPrimitive(prompt).toString()
+        val systemMsg = com.google.gson.JsonPrimitive(
+            "You are an expert fact-checker. Always respond in valid JSON only. Never output anything outside the JSON object."
+        ).toString()
+        return """
+            {
+              "model": "$model",
+              "messages": [
+                {"role": "system", "content": $systemMsg},
+                {"role": "user",   "content": $escapedPrompt}
+              ],
+              "temperature": 0.1,
+              "max_tokens": 2000,
+              "response_format": {"type": "json_object"}
             }
         """.trimIndent()
     }
