@@ -34,22 +34,27 @@ class ArticleEditorActivity : AppCompatActivity() {
     private lateinit var wpClient: WordPressApiClient
     private val viewModel: ArticleEditorViewModel by viewModels()
 
-    // Class-level RSS source fields
     private var rssLink: String = ""
     private var rssCategory: String = "General"
     private var rssImageUrl: String = ""
     private var rssFeedName: String = ""
 
-    // Locally picked gallery image URI
     private var pickedImageUri: Uri? = null
 
-    // Gallery picker launcher
+    /**
+     * Tracks whether the image preview was set by the user (gallery pick or
+     * explicit "Use RSS image" tap). When true, the pipeline result must NOT
+     * overwrite the preview — prevents the image from appearing twice / jumping.
+     */
+    private var imageLockedByUser: Boolean = false
+
     private val galleryLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             if (result.resultCode == Activity.RESULT_OK) {
                 val uri = result.data?.data
                 if (uri != null) {
                     pickedImageUri = uri
+                    imageLockedByUser = true
                     showImagePreview(uri.toString())
                     binding.tvImageStatus.text = "\uD83D\uDDBC\uFE0F Gallery image selected"
                     binding.tvImageStatus.isVisible = true
@@ -70,7 +75,6 @@ class ArticleEditorActivity : AppCompatActivity() {
         observePipelineState()
         setupBackPressConfirmation()
 
-        // Accept full RssItem Parcelable OR individual string extras
         @Suppress("DEPRECATION")
         val rssItem: RssItem? = intent.getParcelableExtra("rss_item")
 
@@ -84,17 +88,19 @@ class ArticleEditorActivity : AppCompatActivity() {
         if (rssTitle.isNotBlank())       binding.etArticleTitle.setText(rssTitle)
         if (rssDescription.isNotBlank()) binding.etArticleSummary.setText(rssDescription)
 
-        // Show RSS image preview if available
+        // Show RSS image preview — mark as NOT user-locked so pipeline can update it
         if (rssImageUrl.isNotBlank()) {
             showImagePreview(rssImageUrl)
             binding.tvImageStatus.text = "\uD83D\uDDBC\uFE0F RSS image found — will be uploaded with article"
             binding.tvImageStatus.isVisible = true
+            // imageLockedByUser stays false here — pipeline may replace with watermark-free image
         }
 
         // ── Image action buttons ──────────────────────────────────────────────
         binding.btnUseRssImage.isVisible = rssImageUrl.isNotBlank()
         binding.btnUseRssImage.setOnClickListener {
             pickedImageUri = null
+            imageLockedByUser = true   // user explicitly chose the RSS image — lock it
             showImagePreview(rssImageUrl)
             binding.tvImageStatus.text = "\uD83D\uDDBC\uFE0F Using RSS image"
             binding.tvImageStatus.isVisible = true
@@ -112,6 +118,10 @@ class ArticleEditorActivity : AppCompatActivity() {
             if (title.isBlank()) {
                 binding.etArticleTitle.error = "Please enter a title"
                 return@setOnClickListener
+            }
+            // Reset image lock when user re-runs pipeline so a better image can appear
+            if (!imageLockedByUser) {
+                // nothing — pipeline is free to update preview
             }
             val item = RssItem(
                 title        = title,
@@ -177,17 +187,21 @@ class ArticleEditorActivity : AppCompatActivity() {
             binding.chipSarvam.isChecked = state.sarvamDone
             try { binding.chipSeo.isChecked = state.seoDone } catch (_: Exception) {}
 
-            // Update image preview from pipeline result
-            when {
-                state.imagePath.isNotBlank() -> {
-                    showImagePreview(state.imagePath)
-                    binding.tvImageStatus.text = "\u2705 Article image downloaded: ${state.imagePath.substringAfterLast('/')}"
-                    binding.tvImageStatus.isVisible = true
-                }
-                state.imageUrl.isNotBlank() -> {
-                    showImagePreview(state.imageUrl)
-                    binding.tvImageStatus.text = "\uD83D\uDDBC\uFE0F Image URL: ${state.imageUrl.take(60)}\u2026"
-                    binding.tvImageStatus.isVisible = true
+            // Only update the image preview from pipeline if the user has NOT manually locked one
+            if (!imageLockedByUser) {
+                when {
+                    state.imagePath.isNotBlank() -> {
+                        showImagePreview(state.imagePath)
+                        binding.tvImageStatus.text =
+                            "\u2705 Article image ready: ${state.imagePath.substringAfterLast('/')}"
+                        binding.tvImageStatus.isVisible = true
+                    }
+                    state.imageUrl.isNotBlank() -> {
+                        showImagePreview(state.imageUrl)
+                        binding.tvImageStatus.text =
+                            "\uD83D\uDDBC\uFE0F Image URL: ${state.imageUrl.take(60)}\u2026"
+                        binding.tvImageStatus.isVisible = true
+                    }
                 }
             }
 
@@ -204,17 +218,12 @@ class ArticleEditorActivity : AppCompatActivity() {
         })
     }
 
-    /**
-     * Build a fully-populated Article from UI + pipeline state.
-     * Auto-generates SEO fields if the AI pipeline has not run yet.
-     */
     private fun buildArticleForSave(status: String = "draft"): Article {
         val state          = viewModel.pipelineState.value
         val currentTitle   = binding.etArticleTitle.text.toString().trim()
         val currentSummary = binding.etArticleSummary.text.toString().trim()
         val currentContent = binding.etArticleContent.text.toString().trim()
 
-        // ── Auto-generate SEO fields when pipeline hasn't run or returned blanks ──
         val autoKeywords = currentTitle.lowercase()
             .split(" ")
             .filter { it.length > 4 }
@@ -303,7 +312,6 @@ class ArticleEditorActivity : AppCompatActivity() {
         binding.btnPublishDraft.isEnabled = false
 
         lifecycleScope.launch {
-            // allowCategoryCreate = false → only push to EXISTING WordPress categories
             val result = withContext(Dispatchers.IO) {
                 wpClient.pushDraft(site, article, adsCode)
             }
@@ -323,7 +331,6 @@ class ArticleEditorActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG
                 ).show()
             } else {
-                // Handle category-not-found gracefully
                 val errMsg = result.error ?: "Unknown error"
                 binding.tvPipelineStatus.text = when {
                     errMsg.contains("CATEGORY_NOT_FOUND", ignoreCase = true) ->

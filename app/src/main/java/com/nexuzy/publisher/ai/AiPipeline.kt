@@ -19,7 +19,7 @@ import kotlinx.coroutines.withContext
  * STEP 2 — VERIFY:   OpenAI fact-check (confidence score fixed: min 0.3)
  * STEP 3 — GRAMMAR:  Sarvam grammar & spelling
  * STEP 4 — SEO:      Gemini generateSeoData → Sarvam generateSeoData backup
- * STEP 5 — IMAGE:    Local file → imageUrl direct upload fallback
+ * STEP 5 — IMAGE:    Watermark check → Google image search fallback → local file
  */
 class AiPipeline(private val context: Context) {
 
@@ -41,7 +41,7 @@ class AiPipeline(private val context: Context) {
         val openAiDone: Boolean = false,
         val sarvamDone: Boolean = false,
         val seoDone: Boolean = false,
-        val sarvamUsedForSeo: Boolean = false,  // true when Sarvam did SEO instead of Gemini
+        val sarvamUsedForSeo: Boolean = false,
         val factCheckPassed: Boolean = false,
         val factCheckFeedback: String = "",
         val grammarIssues: List<String> = emptyList(),
@@ -66,16 +66,12 @@ class AiPipeline(private val context: Context) {
         OPENAI_CHECKING,
         SARVAM_CHECKING,
         SEO_GENERATING, SEO_SARVAM_FALLBACK,
-        IMAGE_DOWNLOADING,
+        IMAGE_DOWNLOADING, IMAGE_WATERMARK_SEARCH,
         COMPLETE, ERROR
     }
 
     // ─── MODE A: Quick OpenAI verify (bulk news list) ──────────────────────────
 
-    /**
-     * Quick credibility check via OpenAI only.
-     * Confidence score is NEVER 0: minimum floor is 0.35 (credible) or 0.15 (not credible).
-     */
     suspend fun verifyOnlyWithOpenAi(rssItem: RssItem): QuickVerifyResult =
         withContext(Dispatchers.IO) {
             val content = when {
@@ -86,22 +82,20 @@ class AiPipeline(private val context: Context) {
             val result = openAi.factCheckArticle(title = rssItem.title, content = content)
 
             if (!result.success) {
-                // OpenAI unavailable — return a default credible score so UI never shows 0%
                 return@withContext QuickVerifyResult(
                     rssItem         = rssItem,
                     credible        = true,
-                    confidenceScore = 0.50f,   // neutral 50% when OpenAI is unavailable
+                    confidenceScore = 0.50f,
                     reason          = "Auto-scored (OpenAI unavailable: ${result.error})",
                     error           = result.error
                 )
             }
 
-            // Ensure confidence is never 0% in the UI
             val rawScore = result.confidenceScore
             val displayScore = when {
-                rawScore > 0f -> rawScore
-                result.isAccurate -> 0.65f   // OpenAI said credible but gave no score
-                else              -> 0.25f   // OpenAI flagged but gave no score
+                rawScore > 0f     -> rawScore
+                result.isAccurate -> 0.65f
+                else              -> 0.25f
             }
 
             QuickVerifyResult(
@@ -188,7 +182,6 @@ class AiPipeline(private val context: Context) {
             stepErrors.add("OpenAI: ${openAiResult.error}")
         }
 
-        // Ensure confidence never shows 0% in the UI
         val displayConfidence = when {
             rawConfidence > 0f      -> rawConfidence
             openAiResult.isAccurate -> 0.65f
@@ -213,7 +206,6 @@ class AiPipeline(private val context: Context) {
         )
 
         if (!seoResult.success) {
-            // Gemini SEO failed (quota or write-phase key exhaustion) → Sarvam backup
             Log.w("AiPipeline", "Gemini SEO failed: ${seoResult.error}. Trying Sarvam SEO backup…")
             stepErrors.add("Gemini SEO: ${seoResult.error}")
             onProgress?.invoke(PipelineProgress(Step.SEO_SARVAM_FALLBACK, "⚠️ Sarvam generating SEO backup…"))
@@ -231,17 +223,31 @@ class AiPipeline(private val context: Context) {
         val focusKeyphrase  = if (seoResult.success) seoResult.focusKeyphrase else ""
         val metaDescription = if (seoResult.success) seoResult.metaDescription else ""
 
-        // ── STEP 5: Article image ──────────────────────────────────────────────
-        //   Priority: (1) already downloaded local file
-        //             (2) download from imageUrl now
-        //             (3) no image (article still pushes, WP uploads on push)
-        onProgress?.invoke(PipelineProgress(Step.IMAGE_DOWNLOADING, "🖼️ Preparing article image…"))
+        // ── STEP 5: Article image — watermark check + search fallback ──────────
+        onProgress?.invoke(PipelineProgress(Step.IMAGE_DOWNLOADING, "🖼️ Downloading and checking article image…"))
         var localImagePath = rssItem.localImagePath
+
         if (localImagePath.isBlank() && rssItem.imageUrl.isNotBlank()) {
-            // Attempt to download image locally for attachment
-            localImagePath = imageDownloader.downloadImage(rssItem.imageUrl, rssItem.title)
+            // downloadImage now handles: download → watermark check → Google fallback
+            val hasSearchKeys = keyManager.getGoogleSearchApiKey().isNotBlank() &&
+                                keyManager.getGoogleSearchCseId().isNotBlank()
+
+            if (hasSearchKeys) {
+                // Pass the article title as search query for the watermark fallback
+                onProgress?.invoke(
+                    PipelineProgress(Step.IMAGE_WATERMARK_SEARCH,
+                    "🔍 Checking image for watermarks…")
+                )
+            }
+
+            localImagePath = imageDownloader.downloadImage(
+                url          = rssItem.imageUrl,
+                titleHint    = rssItem.title,
+                searchQuery  = rssItem.title,
+                apiKeyManager = keyManager
+            )
+
             if (localImagePath.isBlank()) {
-                // Download failed — keep imageUrl so WordPress uploads from URL at push time
                 Log.w("AiPipeline", "Image download failed — WP will upload from URL at push time")
             }
         }
@@ -263,7 +269,7 @@ class AiPipeline(private val context: Context) {
             metaDescription   = metaDescription,
             sourceUrl         = rssItem.link,
             sourceName        = rssItem.feedName,
-            imageUrl          = rssItem.imageUrl,   // kept for WP URL upload fallback
+            imageUrl          = rssItem.imageUrl,
             imagePath         = localImagePath,
             status            = "draft",
             wordpressSiteId   = wordpressSiteId,

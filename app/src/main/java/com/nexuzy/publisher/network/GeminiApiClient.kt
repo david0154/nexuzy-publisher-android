@@ -16,19 +16,6 @@ import java.util.concurrent.TimeUnit
  * Gemini API client.
  * Role 1: Write news articles from RSS item facts.
  * Role 2: Generate SEO data (tags, keywords, focus keyphrase, meta description).
- *
- * KEY FIX: Model fallback chain.
- * Each Gemini model has a COMPLETELY SEPARATE quota pool on the same API key.
- * If gemini-2.0-flash hits quota (limit:0), gemini-1.5-flash on the SAME key
- * still has its own fresh quota. This multiplies effective capacity by 4x.
- *
- * Rotation strategy:
- *   For each API key:  try gemini-2.0-flash → gemini-1.5-flash
- *                                           → gemini-2.0-flash-lite → gemini-1.5-flash-8b
- *   If all 4 models exhausted on key N: move to key N+1 and repeat
- *
- * Threading: callGemini() is a blocking OkHttp call; both public suspend functions
- * now use withContext(Dispatchers.IO) to run off the main thread.
  */
 class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -38,23 +25,8 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         .build()
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
-
-    // v1 endpoint — supports all stable models (2.0-flash, 1.5-flash, 1.5-pro, etc.)
     private val baseUrl = "https://generativelanguage.googleapis.com/v1/models"
 
-    /**
-     * Fallback model chain.
-     * Each entry is a SEPARATE quota pool on the same API key.
-     * Order: newest/best first, smallest/most-available last.
-     *
-     * Free-tier RPD (requests-per-day) reference:
-     *   gemini-2.0-flash       : 1500 RPD, 15 RPM  (but separate pool from others)
-     *   gemini-1.5-flash       : 1500 RPD, 15 RPM
-     *   gemini-2.0-flash-lite  : 1500 RPD, 30 RPM  (higher RPM!)
-     *   gemini-1.5-flash-8b    : 1500 RPD, 15 RPM
-     *
-     * With 3 API keys × 4 models = up to 18 000 free requests/day.
-     */
     private val MODEL_CHAIN = listOf(
         "gemini-2.0-flash",
         "gemini-1.5-flash",
@@ -62,17 +34,12 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         "gemini-1.5-flash-8b"
     )
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Data classes
-    // ─────────────────────────────────────────────────────────────────────────
-
     data class GeminiResult(
         val success: Boolean,
         val content: String,
         val error: String = "",
         val keyUsed: Int = 1,
         val modelUsed: String = DEFAULT_MODEL,
-        /** Seconds to wait before retrying (parsed from Gemini 429 retryDelay). */
         val retryAfterSeconds: Int = 0
     )
 
@@ -87,21 +54,8 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
     // ─────────────────────────────────────────────────────────────────────────
     // ROLE 1: Write news article
-    // NEW: accepts rssFullContent (full article body scraped from article URL)
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Write a complete news article using Gemini.
-     *
-     * @param rssTitle       Original RSS headline.
-     * @param rssDescription Short RSS description/summary (1-3 sentences).
-     * @param rssFullContent Full article body scraped from the article URL (up to 4000 chars).
-     *                       When provided, Gemini uses the real article facts for rewriting.
-     *                       Falls back to rssDescription if empty.
-     * @param category       Article category (e.g. "Technology", "Business").
-     * @param model          Gemini model to use. Uses fallback chain when DEFAULT_MODEL.
-     * @param maxWords       Target article length in words.
-     */
     suspend fun writeNewsArticle(
         rssTitle: String,
         rssDescription: String,
@@ -115,8 +69,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         if (keys.isEmpty()) {
             return@withContext GeminiResult(
                 false, "",
-                "No Gemini API keys configured. " +
-                "Please add at least one Gemini API key in Settings → Gemini API Keys."
+                "No Gemini API keys configured. Please add at least one Gemini API key in Settings."
             )
         }
 
@@ -128,7 +81,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
         for ((keyIndex, key) in keys.withIndex()) {
             for (modelName in modelsToTry) {
-                Log.d("GeminiClient", "Trying key ${keyIndex + 1}/${ keys.size}, model=$modelName")
+                Log.d("GeminiClient", "Trying key ${keyIndex + 1}/${keys.size}, model=$modelName")
                 val result = callGemini(key, modelName, prompt)
 
                 if (result.success) {
@@ -139,12 +92,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                 if (isQuotaError(result.error)) {
                     val retryAfter = parseRetryDelay(result.error)
                     if (retryAfter > maxRetryAfter) maxRetryAfter = retryAfter
-                    Log.w(
-                        "GeminiClient",
-                        "Key ${keyIndex + 1} / $modelName quota exceeded" +
-                        (if (retryAfter > 0) " (retry in ${retryAfter}s)" else "") +
-                        ", trying next model"
-                    )
+                    Log.w("GeminiClient", "Key ${keyIndex + 1} / $modelName quota exceeded, trying next model")
                     lastError = result.error
                     continue
                 }
@@ -152,7 +100,6 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                 Log.e("GeminiClient", "Non-quota error on key ${keyIndex + 1} / $modelName: ${result.error}")
                 return@withContext result.copy(keyUsed = keyIndex + 1, modelUsed = modelName)
             }
-
             Log.w("GeminiClient", "Key ${keyIndex + 1}: all ${modelsToTry.size} models quota exceeded, trying next key")
             keyManager.rotateGeminiKey()
         }
@@ -170,7 +117,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // ROLE 2: Generate SEO metadata from article
+    // ROLE 2: Generate SEO metadata
     // ─────────────────────────────────────────────────────────────────────────
 
     suspend fun generateSeoData(
@@ -201,7 +148,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Internal: HTTP call (blocking — must be called from Dispatchers.IO)
+    // Internal: HTTP call
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun callGemini(apiKey: String, model: String, prompt: String): GeminiResult {
@@ -236,13 +183,6 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
     // Prompt builders
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Build the article writing prompt.
-     *
-     * When rssFullContent is available (scraped from the article URL), Gemini sees the
-     * complete original article and can rewrite it accurately with full context.
-     * When only rssDescription is available (RSS-only fallback), Gemini gets the summary only.
-     */
     private fun buildArticlePrompt(
         title: String,
         desc: String,
@@ -279,13 +219,18 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             - Objective, professional journalistic tone
             - Add relevant context and background using the source material above
             - End with implications, reactions, or outlook
-            - Rewrite in your own words — do NOT copy the original verbatim
+            - Rewrite completely in your own words — do NOT copy the original verbatim
             - Do NOT add quotes that are not present in the source
             - Do NOT invent statistics or facts not in the source
-            - Write a NEW headline that is SEO-friendly
+            - Write a NEW SEO-friendly headline
             - Use only the facts provided in the source above
+            - Do NOT mention, credit, or reference the original author, journalist, reporter, or writer by name anywhere in the article
+            - Do NOT include any byline, "By [Name]", "Written by", "Reported by", or "According to [journalist name]" lines
+            - Do NOT mention the original publication's staff, contributors, or editors by name
+            - Do NOT include image captions, photo credits, or image HTML tags — output plain text article body only
+            - Do NOT repeat or duplicate the headline or any paragraph within the article body
 
-            Write the complete rewritten article now (headline first, then body):
+            Write the complete rewritten article now (headline first, then body paragraphs only):
         """.trimIndent()
     }
 
@@ -325,9 +270,9 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             val tagsArr = json.getAsJsonArray("tags")
             val tags = (0 until tagsArr.size()).map { tagsArr[it].asString }
             SeoData(
-                success = true,
-                tags = tags,
-                metaKeywords = json.get("meta_keywords")?.asString ?: tags.joinToString(", "),
+                success        = true,
+                tags           = tags,
+                metaKeywords   = json.get("meta_keywords")?.asString ?: tags.joinToString(", "),
                 focusKeyphrase = json.get("focus_keyphrase")?.asString ?: "",
                 metaDescription = json.get("meta_description")?.asString ?: ""
             )
