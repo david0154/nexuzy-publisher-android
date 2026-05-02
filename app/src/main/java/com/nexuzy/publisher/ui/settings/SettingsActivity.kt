@@ -10,6 +10,7 @@ import com.nexuzy.publisher.data.firebase.FirestoreUserRepository
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
 import com.nexuzy.publisher.data.prefs.AppPreferences
 import com.nexuzy.publisher.databinding.ActivitySettingsBinding
+import com.nexuzy.publisher.ai.ModelDownloadManager
 import kotlinx.coroutines.launch
 
 class SettingsActivity : AppCompatActivity() {
@@ -18,6 +19,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var keyManager: ApiKeyManager
     private lateinit var appPreferences: AppPreferences
     private lateinit var firestoreRepo: FirestoreUserRepository
+    private lateinit var modelDownloadManager: ModelDownloadManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,9 +29,10 @@ class SettingsActivity : AppCompatActivity() {
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         supportActionBar?.title = "Settings"
 
-        keyManager     = ApiKeyManager(this)
-        appPreferences = AppPreferences(this)
-        firestoreRepo  = FirestoreUserRepository(keyManager, appPreferences)
+        keyManager           = ApiKeyManager(this)
+        appPreferences       = AppPreferences(this)
+        firestoreRepo        = FirestoreUserRepository(keyManager, appPreferences)
+        modelDownloadManager = ModelDownloadManager(this)
 
         loadExistingKeys()
         restoreFromFirestoreIfNeeded()
@@ -75,6 +78,9 @@ class SettingsActivity : AppCompatActivity() {
 
             etSupportEmail.setText(appPreferences.supportEmail)
             etPrivacyPolicyUrl.setText(appPreferences.privacyPolicyUrl)
+
+            // HuggingFace token for offline model download
+            etHfToken.setText(modelDownloadManager.getHuggingFaceToken())
         }
         setOptionalText("etWpAdsCode", keyManager.getWordPressAdsCode())
     }
@@ -99,6 +105,12 @@ class SettingsActivity : AppCompatActivity() {
 
                 appPreferences.supportEmail     = etSupportEmail.text.toString().trim()
                 appPreferences.privacyPolicyUrl = etPrivacyPolicyUrl.text.toString().trim()
+
+                // Save HuggingFace token for offline model download
+                val hfToken = etHfToken.text.toString().trim()
+                if (hfToken.isNotBlank()) {
+                    modelDownloadManager.saveHuggingFaceToken(hfToken)
+                }
             }
             keyManager.setWordPressAdsCode(getOptionalText("etWpAdsCode"))
             keyManager.resetRotation()

@@ -24,12 +24,8 @@ import java.io.File
  * Android's built-in DownloadManager — supports WiFi-only, resume,
  * system notifications, and Bearer token auth.
  *
- * Model  : gemma-3n-E2B-it-int4.litertlm  (~2 GB)
- * Source : huggingface.co/google/gemma-3n-E2B-it-litert-lm
- * Format : LiteRT (.litertlm) — runs on Android via MediaPipe tasks-genai
- *
- * HuggingFace token is REQUIRED (model is gated).
- * Default token is hardcoded below; override via saveHuggingFaceToken().
+ * HuggingFace token MUST be set by user in Settings → HuggingFace Token.
+ * No hardcoded token — the model is gated and requires personal approval.
  */
 class ModelDownloadManager(private val context: Context) {
 
@@ -46,10 +42,6 @@ class ModelDownloadManager(private val context: Context) {
         private const val PREF_FILE      = "devil_ai_prefs"
         private const val PREF_DL_ID     = "hf_download_id"
         private const val PREF_HF_TOKEN  = "hf_token"
-
-        // Hardcoded default HF token — private repo, safe to store here.
-        // User-saved token (via saveHuggingFaceToken) takes priority.
-        private val HF_TOKEN_DEFAULT = "hf_" + "tbhvKuIP" + "WnkhKUyn" + "PuKiDnSu" + "rHJVmpvAxY"
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -83,13 +75,12 @@ class ModelDownloadManager(private val context: Context) {
     }
 
     /**
-     * Returns saved token, or falls back to hardcoded default.
-     * Never returns blank — download will always have a valid token.
+     * Returns user-saved token. Returns blank if not set.
+     * If blank, the download will fail with a clear error message.
      */
     fun getHuggingFaceToken(): String {
-        val saved = context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
+        return context.getSharedPreferences(PREF_FILE, Context.MODE_PRIVATE)
             .getString(PREF_HF_TOKEN, "") ?: ""
-        return saved.ifBlank { HF_TOKEN_DEFAULT }
     }
 
     /**
@@ -102,8 +93,9 @@ class ModelDownloadManager(private val context: Context) {
 
             val token = getHuggingFaceToken()
             if (token.isBlank()) {
-                Log.e(TAG, "HF token blank — should never happen with hardcoded default")
-                trySend(DownloadProgress(error = "HuggingFace token missing."))
+                trySend(DownloadProgress(
+                    error = "HuggingFace token not set. Please add it in Settings → HuggingFace Token."
+                ))
                 close()
                 return@callbackFlow
             }

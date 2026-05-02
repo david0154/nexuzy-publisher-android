@@ -28,23 +28,6 @@ import kotlinx.coroutines.withContext
  *
  * A ChatGPT-style in-app AI assistant branded as "David AI".
  * Powered by Sarvam AI for conversation and Gemini for article generation.
- *
- * NEW FEATURES:
- *   1. Weather Awareness   — fetches real-time location-based weather via Open-Meteo
- *                             (free, no API key) and injects it into every AI conversation
- *                             so David AI can answer weather questions contextually.
- *
- *   2. Article Generation  — when user types a command like:
- *                             "generate article about [topic]"
- *                             "write news about [topic]"
- *                             "article about [topic]"
- *                             David AI generates a full original draft with:
- *                             - Title, Summary, Full HTML content
- *                             - Image search reference for Wikipedia/Wikimedia
- *                             - Category + SEO tags
- *
- * Permissions needed:
- *   ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION (requested at runtime)
  */
 class DavidAiChatActivity : AppCompatActivity() {
 
@@ -156,10 +139,9 @@ class DavidAiChatActivity : AppCompatActivity() {
 
         setInputEnabled(false)
 
-        // Check if this is an article generation command
         val articleTopic = ArticleGeneratorClient.extractTopic(text)
         if (articleTopic != null) {
-            handleArticleGeneration(text, articleTopic)
+            handleArticleGeneration(articleTopic)
         } else {
             handleNormalChat(text)
         }
@@ -167,9 +149,8 @@ class DavidAiChatActivity : AppCompatActivity() {
 
     // ── Article Generation Handler ───────────────────────────────────────────
 
-    private fun handleArticleGeneration(originalText: String, topic: String) {
+    private fun handleArticleGeneration(topic: String) {
         val finalTopic = topic.ifBlank {
-            // User typed just "generate article" with no topic — ask for it
             setInputEnabled(true)
             adapter.addMessage(ChatMessage(
                 content = "\uD83D\uDCDD What topic should I write about?\n" +
@@ -203,7 +184,6 @@ class DavidAiChatActivity : AppCompatActivity() {
     // ── Normal Sarvam Chat Handler ────────────────────────────────────────────
 
     private fun handleNormalChat(text: String) {
-        // Inject weather context as a system-level prefix if available and relevant
         val weatherTriggers = listOf("weather", "temperature", "rain", "sunny", "cold", "hot", "humid", "wind", "forecast", "climate")
         val isWeatherQuery = weatherTriggers.any { text.lowercase().contains(it) }
 
