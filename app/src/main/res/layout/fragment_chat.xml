@@ -6,8 +6,24 @@
     android:layout_height="match_parent"
     android:background="@color/background">
 
+    <!-- Empty state shown before first message -->
+    <TextView
+        android:id="@+id/tvChatEmpty"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Ask me anything about news writing, SEO, or publishing!"
+        android:textColor="@color/text_hint"
+        android:textSize="15sp"
+        android:gravity="center"
+        android:padding="32dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@+id/inputBarLayout"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvChat"
+        android:id="@+id/rvChatMessages"
         android:layout_width="0dp"
         android:layout_height="0dp"
         android:clipToPadding="false"
@@ -34,7 +50,7 @@
         app:layout_constraintStart_toStartOf="parent">
 
         <EditText
-            android:id="@+id/etMessage"
+            android:id="@+id/etChatInput"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
@@ -53,7 +69,7 @@
             android:textColorHint="@color/text_hint" />
 
         <ImageButton
-            android:id="@+id/btnSend"
+            android:id="@+id/btnSendMessage"
             android:layout_width="44dp"
             android:layout_height="44dp"
             android:layout_marginStart="8dp"
