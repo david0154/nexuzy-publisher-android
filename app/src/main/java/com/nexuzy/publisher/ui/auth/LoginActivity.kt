@@ -16,6 +16,10 @@ import com.nexuzy.publisher.R
 import com.nexuzy.publisher.auth.GoogleSignInManager
 import com.nexuzy.publisher.data.db.AppDatabase
 import com.nexuzy.publisher.data.db.entity.UserProfile
+import com.nexuzy.publisher.data.firebase.FirestoreUserRepository
+import com.nexuzy.publisher.data.firebase.RssFirestoreSync
+import com.nexuzy.publisher.data.prefs.ApiKeyManager
+import com.nexuzy.publisher.data.prefs.AppPreferences
 import com.nexuzy.publisher.databinding.ActivityLoginBinding
 import com.nexuzy.publisher.ui.main.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -56,7 +60,6 @@ class LoginActivity : AppCompatActivity() {
     private fun setupGoogleSignInButton() {
         binding.btnGoogleSignIn.setOnClickListener {
             if (!googleSignInManager.isConfigured) {
-                // Client ID not configured yet — show a clear message instead of crashing.
                 Toast.makeText(
                     this,
                     "\u26a0\ufe0f Google Sign-In is not set up yet.\n" +
@@ -102,7 +105,7 @@ class LoginActivity : AppCompatActivity() {
         } catch (e: ApiException) {
             val message = when (e.statusCode) {
                 GoogleSignInStatusCodes.SIGN_IN_CANCELLED -> "Sign-In cancelled"
-                GoogleSignInStatusCodes.NETWORK_ERROR -> "Network error — check your connection"
+                GoogleSignInStatusCodes.NETWORK_ERROR     -> "Network error — check your connection"
                 else -> "Google Sign-In failed (code ${e.statusCode})"
             }
             Log.e("LoginActivity", "Google sign-in ApiException: ${e.statusCode}", e)
@@ -116,23 +119,87 @@ class LoginActivity : AppCompatActivity() {
         auth.signInWithCredential(credential)
             .addOnSuccessListener { result ->
                 val firebaseUser = result.user ?: return@addOnSuccessListener
-                // Persist user profile to local Room DB.
+
                 CoroutineScope(Dispatchers.IO).launch {
+                    // 1. Save user profile to local Room DB
                     try {
                         AppDatabase.getDatabase(this@LoginActivity)
                             .userProfileDao()
                             .upsertUserProfile(
                                 UserProfile(
-                                    uid = firebaseUser.uid,
-                                    email = firebaseUser.email ?: "",
+                                    uid         = firebaseUser.uid,
+                                    email       = firebaseUser.email ?: "",
                                     displayName = firebaseUser.displayName ?: "",
-                                    photoUrl = firebaseUser.photoUrl?.toString() ?: ""
+                                    photoUrl    = firebaseUser.photoUrl?.toString() ?: ""
                                 )
                             )
                     } catch (e: Exception) {
                         Log.e("LoginActivity", "Failed to save user profile: ${e.message}", e)
                     }
+
+                    // 2. Restore API keys from Firestore (Settings: WP URL, Gemini, OpenAI, Sarvam)
+                    try {
+                        val keyManager    = ApiKeyManager(this@LoginActivity)
+                        val appPrefs      = AppPreferences(this@LoginActivity)
+                        val firestoreRepo = FirestoreUserRepository(keyManager, appPrefs)
+                        val restored      = firestoreRepo.loadApiKeysFromFirestore()
+                        if (restored) {
+                            Log.i("LoginActivity", "✅ API keys restored from Firestore")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("LoginActivity", "Failed to restore API keys: ${e.message}", e)
+                    }
+
+                    // 3. Restore RSS feeds from Firestore if local Room DB is empty
+                    try {
+                        val rssSync = RssFirestoreSync(this@LoginActivity)
+                        rssSync.restoreFeedsIfEmpty(
+                            // RssFirestoreSync needs a LifecycleCoroutineScope — use a plain
+                            // CoroutineScope here since we are already in IO and LoginActivity
+                            // does not expose lifecycleScope easily from a background thread.
+                            // The actual per-screen restore still happens in RssFragment;
+                            // this is a best-effort pre-warm on login.
+                            scope = androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle
+                                .let {
+                                    // Wrap into a LifecycleCoroutineScope-compatible scope
+                                    androidx.lifecycle.lifecycleScope
+                                        .let { _ ->
+                                            // Fallback: direct Room + Firestore call without
+                                            // LifecycleCoroutineScope wrapper
+                                            null
+                                        }
+                                } ?: run {
+                                // Direct approach — bypass RssFirestoreSync lifecycle requirement
+                                val keyManager    = ApiKeyManager(this@LoginActivity)
+                                val appPrefs      = AppPreferences(this@LoginActivity)
+                                val firestoreRepo = FirestoreUserRepository(keyManager, appPrefs)
+                                val db            = AppDatabase.getDatabase(this@LoginActivity)
+                                val localCount    = db.rssFeedDao().getCount()
+                                if (localCount == 0) {
+                                    val cloudFeeds = firestoreRepo.loadRssFeedsFromFirestore()
+                                    if (cloudFeeds.isNotEmpty()) {
+                                        cloudFeeds.forEach { entry ->
+                                            db.rssFeedDao().insert(
+                                                com.nexuzy.publisher.data.model.RssFeed(
+                                                    name     = entry.name,
+                                                    url      = entry.url,
+                                                    category = entry.category,
+                                                    isActive = entry.isActive
+                                                )
+                                            )
+                                        }
+                                        Log.i("LoginActivity",
+                                            "✅ ${cloudFeeds.size} RSS feeds restored from Firestore on login")
+                                    }
+                                }
+                                return@launch
+                            }
+                        )
+                    } catch (e: Exception) {
+                        Log.e("LoginActivity", "Failed to restore RSS feeds: ${e.message}", e)
+                    }
                 }
+
                 goToMain()
             }
             .addOnFailureListener { e ->
