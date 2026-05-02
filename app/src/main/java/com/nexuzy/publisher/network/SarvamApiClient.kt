@@ -21,8 +21,8 @@ import java.util.concurrent.TimeUnit
  *
  * ROLE 1 — writeArticle():
  *   Backup article writer when ALL Gemini keys/models are exhausted.
- *   maxWords is clamped to 300–650 so Sarvam never over-runs its token budget.
- *   max_tokens raised to 4096 so a full article is never truncated.
+ *   maxWords is clamped to 300–450 so Sarvam never over-runs its token budget.
+ *   max_tokens set to 2048 — the maximum allowed on the starter subscription tier.
  *
  * ROLE 2 — generateSeoData():
  *   Backup SEO generator when Gemini SEO also fails.
@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit
  *   Grammar + spelling correction PLUS humanise pass after writing.
  *   Safe fallback: if Sarvam returns blank or errors, the ORIGINAL content
  *   is returned unchanged — never replaces good content with a broken response.
- *   max_tokens raised to 4096 for grammar pass too.
+ *   max_tokens set to 2048 for grammar pass too (starter tier limit).
  */
 class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
@@ -43,11 +43,12 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     // ─── ARTICLE TOKEN BUDGET ─────────────────────────────────────────────────────────────
-    // 650 words ≈ ~900 tokens output. 4096 max_tokens gives plenty of headroom
-    // for the full prompt + response without truncation.
-    private val SARVAM_MAX_TOKENS = 4096
+    // Sarvam starter tier allows a maximum of 2048 output tokens.
+    // 450 words ≈ ~620 tokens output — well within the 2048 limit.
+    // Grammar chunks are ≤1800 chars so they also stay safely under 2048 tokens.
+    private val SARVAM_MAX_TOKENS = 2048
     private val SARVAM_MIN_WORDS  = 300
-    private val SARVAM_MAX_WORDS  = 650
+    private val SARVAM_MAX_WORDS  = 450   // reduced from 650 to keep output under 2048 tokens
 
     // ─── Data classes ─────────────────────────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         rssDescription: String,
         rssFullContent: String = "",
         category: String = "",
-        maxWords: Int = 600
+        maxWords: Int = 400
     ): WriteArticleResult {
         val apiKey = keyManager.getSarvamKey()
         if (apiKey.isBlank()) return WriteArticleResult(
@@ -79,7 +80,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             error = "Sarvam API key not configured. Add your key in Settings."
         )
 
-        // Clamp word count to safe Sarvam range: 300–650
+        // Clamp word count to safe Sarvam range: 300–450
         val safeWords = maxWords.coerceIn(SARVAM_MIN_WORDS, SARVAM_MAX_WORDS)
         Log.i("SarvamClient", "[ROLE 1] Writing article ($safeWords words) as Gemini backup")
 
