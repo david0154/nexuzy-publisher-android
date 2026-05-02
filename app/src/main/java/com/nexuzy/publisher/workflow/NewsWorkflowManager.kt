@@ -289,8 +289,7 @@ class NewsWorkflowManager(private val context: Context) {
                 val items = rssParser.fetchFeed(
                     feedUrl      = feed.url,
                     feedName     = feed.name,
-                    feedCategory = feed.category,
-                    enrichItems  = true
+                    feedCategory = feed.category
                 ).take(limitPerFeed)
                 merged.addAll(items)
                 Log.d("NewsWorkflow", "Fetched ${items.size} from ${feed.name}")
