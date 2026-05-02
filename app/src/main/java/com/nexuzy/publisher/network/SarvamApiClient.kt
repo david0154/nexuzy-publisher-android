@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit
  *   Backup article writer when ALL Gemini keys/models are exhausted.
  *   maxWords is clamped to 300–450 so Sarvam never over-runs its token budget.
  *   max_tokens set to 2048 — the maximum allowed on the starter subscription tier.
+ *   Output is post-processed to strip AI thinking preamble and tags/footer junk.
  *
  * ROLE 2 — generateSeoData():
  *   Backup SEO generator when Gemini SEO also fails.
@@ -48,7 +49,23 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
     // Grammar chunks are ≤1800 chars so they also stay safely under 2048 tokens.
     private val SARVAM_MAX_TOKENS = 2048
     private val SARVAM_MIN_WORDS  = 300
-    private val SARVAM_MAX_WORDS  = 450   // reduced from 650 to keep output under 2048 tokens
+    private val SARVAM_MAX_WORDS  = 450
+
+    // ─── Regex patterns for post-processing article output ───────────────────────────────
+    // Strips AI thinking preamble lines that leak through at the top
+    private val THINKING_PREFIXES = listOf(
+        "okay, let's", "okay, i'll", "okay! let's", "let me ", "let's tackle",
+        "let's think", "alright,", "sure! here", "sure, here", "here is",
+        "here's the", "i need to", "i'll ", "i will ", "as requested,",
+        "of course,", "certainly,", "absolutely,"
+    )
+    // Regex to strip tags footer: matches "🏷️ Tags:", "Tags:", "#word" lines at end
+    private val TAGS_LINE_REGEX = Regex(
+        """(?im)^[\uFE0F🏷️\s]*tags?\s*:.*$"""
+    )
+    private val TRAILING_HASHTAG_REGEX = Regex(
+        """(?im)^(#\w+[\s·•\-]*){2,}$"""
+    )
 
     // ─── Data classes ─────────────────────────────────────────────────────────────────────
 
@@ -80,7 +97,6 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             error = "Sarvam API key not configured. Add your key in Settings."
         )
 
-        // Clamp word count to safe Sarvam range: 300–450
         val safeWords = maxWords.coerceIn(SARVAM_MIN_WORDS, SARVAM_MAX_WORDS)
         Log.i("SarvamClient", "[ROLE 1] Writing article ($safeWords words) as Gemini backup")
 
@@ -90,7 +106,8 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 apiKey,
                 systemPrompt = "You are a seasoned news journalist with 15 years of experience. " +
                     "Write directly in a natural human voice — no preamble, no thinking out loud, no commentary. " +
-                    "Start immediately with the headline.",
+                    "Start immediately with the article headline. " +
+                    "Do NOT include any Tags, hashtags, or bylines at the end.",
                 userPrompt = prompt,
                 temperature = 1.05,
                 maxTokens = SARVAM_MAX_TOKENS,
@@ -98,8 +115,14 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 presencePenalty = 0.3
             ).let { (ok, text, err) ->
                 if (ok && text.isNotBlank()) {
-                    Log.i("SarvamClient", "[ROLE 1] Success — ${text.split("\\s+".toRegex()).size} words written")
-                    WriteArticleResult(true, text)
+                    val cleaned = cleanArticleOutput(text)
+                    if (cleaned.isBlank()) {
+                        Log.e("SarvamClient", "[ROLE 1] Output was entirely junk after cleaning")
+                        WriteArticleResult(false, error = "Sarvam returned only preamble/junk")
+                    } else {
+                        Log.i("SarvamClient", "[ROLE 1] Success — ${cleaned.split("\\s+".toRegex()).size} words written")
+                        WriteArticleResult(true, cleaned)
+                    }
                 } else {
                     Log.e("SarvamClient", "[ROLE 1] Failed: $err")
                     WriteArticleResult(false, error = err)
@@ -109,6 +132,49 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             Log.e("SarvamClient", "[ROLE 1] Exception: ${e.message}")
             WriteArticleResult(false, error = e.message ?: "Sarvam write error")
         }
+    }
+
+    /**
+     * Cleans raw Sarvam article output:
+     * 1. Strips AI thinking/preamble lines from the top
+     * 2. Strips "Tags:" footer lines and trailing hashtag lines from the bottom
+     */
+    private fun cleanArticleOutput(raw: String): String {
+        val lines = raw.lines().toMutableList()
+
+        // Strip thinking preamble from the top — drop leading lines that start with
+        // known AI planning phrases (case-insensitive). Stop as soon as a clean line is found.
+        var startIdx = 0
+        for (i in lines.indices) {
+            val lower = lines[i].trim().lowercase()
+            val isThinking = THINKING_PREFIXES.any { lower.startsWith(it) }
+                || lower.isEmpty() // also skip blank preamble lines
+            if (isThinking) {
+                startIdx = i + 1
+            } else {
+                // First non-thinking non-blank line — stop stripping
+                break
+            }
+        }
+
+        // Strip Tags footer and trailing hashtag blocks from the bottom
+        var result = lines.drop(startIdx).joinToString("\n")
+        result = TAGS_LINE_REGEX.replace(result, "")
+        result = TRAILING_HASHTAG_REGEX.replace(result, "")
+
+        // Clean up extra blank lines left by removals
+        result = result.replace(Regex("\n{3,}"), "\n\n").trim()
+
+        if (result.length < raw.length * 0.3) {
+            // Sanity check: if we stripped more than 70% of content, something is wrong —
+            // return the raw version with only the tags footer stripped
+            Log.w("SarvamClient", "[cleanArticleOutput] Over-stripped — falling back to tags-only clean")
+            return TAGS_LINE_REGEX.replace(raw, "")
+                .replace(TRAILING_HASHTAG_REGEX, "")
+                .trim()
+        }
+
+        return result
     }
 
     // ─── ROLE 2: Backup SEO generator ───────────────────────────────────────────────────
@@ -178,13 +244,6 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
     // ─── ROLE 3: Grammar check + Humanise pass ──────────────────────────────────────────
 
-    /**
-     * Grammar + spelling correction AND humanise pass.
-     *
-     * SAFE FALLBACK: If Sarvam returns a blank or errored response for ANY chunk,
-     * that chunk keeps the original text — we never replace good content with nothing.
-     * The full original is also returned if the key is missing or an exception occurs.
-     */
     suspend fun checkGrammarAndSpelling(content: String): GrammarCheckResult {
         if (content.isBlank()) return GrammarCheckResult(true, content)
 
@@ -210,15 +269,14 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                         "Your job is to fix grammar, fix spelling, strip any AI thinking text that leaked in, " +
                         "and rewrite any robotic phrasing into natural journalist language. " +
                         "Keep all facts, names, numbers and quotes exactly as they are. " +
-                        "Output only the rewritten text — no notes, no commentary.",
+                        "Output only the rewritten text — no notes, no commentary, no tags, no hashtags.",
                     userPrompt = buildHumaniseChunkPrompt(chunk),
                     temperature = 1.0,
                     maxTokens = SARVAM_MAX_TOKENS,
                     frequencyPenalty = 0.5,
                     presencePenalty  = 0.4
                 )
-                // SAFE: only use Sarvam result if it's non-blank; otherwise keep original chunk
-                val safeResult = if (ok && text.isNotBlank()) text else chunk
+                val safeResult = if (ok && text.isNotBlank()) cleanArticleOutput(text) else chunk
                 if (!ok || text.isBlank()) {
                     Log.w("SarvamClient", "[ROLE 3] Chunk ${i + 1} returned blank/error ($err) — keeping original")
                 }
@@ -226,7 +284,6 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             }
 
             val joined = corrected.joinToString(" ")
-            // Final safety: if joined result is shorter than 50% of original, something went wrong
             if (joined.length < content.length / 2) {
                 Log.w("SarvamClient", "[ROLE 3] Result suspiciously short (${joined.length} vs ${content.length}) — returning original")
                 return GrammarCheckResult(true, content, error = "Grammar result too short — original kept")
@@ -235,7 +292,6 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             GrammarCheckResult(true, joined)
         } catch (e: Exception) {
             Log.e("SarvamClient", "[ROLE 3] Error: ${e.message} — returning original content")
-            // Always return original on exception — never return blank
             GrammarCheckResult(false, content, error = e.message ?: "Grammar/humanise error")
         }
     }
@@ -252,7 +308,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             "RSS summary: $desc\n(Full article unavailable — write from title and summary.)"
 
         return """
-You are a seasoned news journalist with 15 years of experience writing for major digital publications. You have a sharp, direct voice — you get to the point fast and your writing never sounds like it came from a machine.
+You are a seasoned news journalist with 15 years of experience writing for major digital publications.
 
 Today is $today. Write a fresh news article for the "$category" section.
 
@@ -262,32 +318,34 @@ $source
 
 Write a compelling, publish-ready news article of approximately $maxWords words (between ${maxWords - 50} and ${maxWords + 50} words) based only on the facts above. Do not invent quotes, statistics, or events not present in the source.
 
-WRITING STYLE:
-- Sound like a human journalist, not an AI. Vary your sentence length.
-- Write a punchy SEO headline first. Direct and specific.
-- Your first sentence drops the reader straight into the story. No "In a significant development", no "In today's rapidly evolving landscape".
-- Never use: "Furthermore", "Moreover", "In conclusion", "It is worth noting", "Delve into", "This underscores", "Notably", "Landscape", "In an era of", "Navigate", "Pivotal", "Shed light on".
-- No section headers. No bullet points. Pure flowing article prose only.
-- Vary paragraph length. Some paragraphs are one sentence. Some are three or four.
-- End naturally — never "Only time will tell" or "remains to be seen".
-- Do not add bylines, photo captions, or Tags at the end.
+STRICT OUTPUT RULES — violating any of these will cause the article to be rejected:
+- Begin your response with the article headline. Nothing before it — no "Okay", no "Sure", no "Here is", no thinking text.
+- End your response with the last sentence of the article. Nothing after it — no Tags, no hashtags (#), no "Tags:", no bylines, no photo captions.
+- Pure article prose only: no bullet points, no section headers, no lists.
 
-Write the article now (headline first, then body paragraphs):
+WRITING STYLE:
+- Sharp, direct voice. Vary your sentence length.
+- First sentence drops the reader straight into the story.
+- Never use: "Furthermore", "Moreover", "In conclusion", "It is worth noting", "Delve into", "Notably", "Landscape", "In an era of", "Pivotal", "Shed light on".
+- Vary paragraph length. Some one sentence. Some three or four.
+- End naturally.
+
+Write the article now:
         """.trimIndent()
     }
 
     private fun buildHumaniseChunkPrompt(chunk: String): String {
         return """
-You are a senior news editor. A reporter filed this text and parts of it sound robotic or have AI thinking text mixed in. Fix it.
+You are a senior news editor. Fix the filed text below.
 
-Do all of the following in one pass:
-1. Remove any AI thinking text that leaked in ("Okay, let's tackle this", "Let me", "I need to", "Sure", "Here is", or any planning text)
-2. Fix all grammar and spelling errors
-3. Rewrite any sentence that sounds like an AI wrote it — make it sound like a human journalist
-4. Do NOT change any facts, names, numbers, quotes, or dates
-5. Do not use: "Furthermore", "Moreover", "Notably", "This underscores", "Landscape", "Pivotal", "Delve", "In an era of"
+1. Remove any AI thinking text ("Okay, let's tackle this", "Let me", "I need to", "Sure", "Here is", or any planning text)
+2. Remove any tags/hashtag lines at the end (lines starting with # or containing "Tags:")
+3. Fix all grammar and spelling errors
+4. Rewrite robotic phrasing into natural journalist language
+5. Do NOT change any facts, names, numbers, quotes, or dates
+6. Do not use: "Furthermore", "Moreover", "Notably", "This underscores", "Pivotal", "Delve"
 
-Output only the rewritten text. No notes, no commentary, no explanation.
+Output only the rewritten article text. No notes, no commentary, no tags.
 
 Filed text:
 $chunk
