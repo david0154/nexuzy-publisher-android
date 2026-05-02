@@ -236,9 +236,9 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
         val sourceSection = if (fullContent.isNotBlank()) {
             """
-            |─── ORIGINAL ARTICLE (scraped from source) ───────────────────────
+            |─── ORIGINAL ARTICLE (scraped from source) ────────────────────────────
             |${fullContent.take(3500)}
-            |──────────────────────────────────────────────────────────────────
+            |──────────────────────────────────────────────────────────────
             |
             |Short RSS Summary (for context): $desc
             """.trimMargin()
@@ -252,14 +252,24 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         val webSection = if (liveWebContext.isNotBlank()) {
             """
             |
-            |─── LIVE WEB CONTEXT (fetched today from DuckDuckGo) ─────────────
+            |─── LIVE WEB CONTEXT (fetched today from DuckDuckGo) ─────────────────
             |$liveWebContext
-            |──────────────────────────────────────────────────────────────────
+            |──────────────────────────────────────────────────────────────
             |(Use the above for current context. Prioritise the original article facts over web context.)
             """.trimMargin()
         } else ""
 
         return """
+            ███ CRITICAL OUTPUT RULES — READ FIRST ███
+            - Output the final news article ONLY.
+            - Do NOT include any thinking, reasoning, planning, notes, or internal commentary.
+            - Do NOT start with "Okay", "Let me", "First", "I need to", "I'll", "Sure", or any preamble.
+            - Do NOT explain what you are going to write or how you will approach the task.
+            - Do NOT include meta-commentary about the article before, during, or after the article.
+            - Begin your response IMMEDIATELY with the SEO headline of the article.
+            - End your response with the final paragraph of the article body. Nothing after.
+            █████████████████████████████████
+
             You are a professional news journalist writing for today, $today.
             IMPORTANT: This is a CURRENT news article. Do NOT use outdated 2024 data.
             Write as if you are reporting fresh, breaking, or recently published news.
@@ -288,7 +298,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             - Do NOT repeat or duplicate the headline or any paragraph within the article body
             - Do NOT reference "as of 2024" or any past year — this article is current as of $today
 
-            Write the complete rewritten article now (headline first, then body paragraphs only):
+            Write the complete rewritten article now (SEO headline first, then body paragraphs only):
         """.trimIndent()
     }
 
