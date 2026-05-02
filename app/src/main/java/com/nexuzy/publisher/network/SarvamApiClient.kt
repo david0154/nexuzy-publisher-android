@@ -25,7 +25,9 @@ import java.util.concurrent.TimeUnit
  *   Called in AiPipeline STEP 4 fallback.
  *
  * ROLE 3 — checkGrammarAndSpelling():
- *   Grammar & spelling correction after writing.
+ *   Grammar & spelling correction after writing, before OpenAI clean step.
+ *   Uses sarvam-m chat with explicit grammar+spelling prompt.
+ *   Does NOT use the translate API (which only translates, not grammar-checks).
  */
 class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
@@ -36,7 +38,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    // ─── Data classes ──────────────────────────────────────────────────────────
+    // ─── Data classes ───────────────────────────────────────────────────────────
 
     data class WriteArticleResult(
         val success: Boolean,
@@ -51,7 +53,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         val error: String = ""
     )
 
-    // ─── ROLE 1: Backup article writer ────────────────────────────────────────
+    // ─── ROLE 1: Backup article writer ───────────────────────────────────────
 
     suspend fun writeArticle(
         rssTitle: String,
@@ -68,22 +70,21 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         return try {
             Log.i("SarvamClient", "[ROLE 1] Writing article as Gemini backup with sarvam-m")
             val prompt = buildArticlePrompt(rssTitle, rssDescription, rssFullContent, category, maxWords)
-            callChat(apiKey, systemPrompt = "You are a professional news journalist. Write clear, factual, engaging articles in formal English. Never invent facts.", userPrompt = prompt)
-                .let { (ok, text, err) ->
-                    if (ok) WriteArticleResult(true, text)
-                    else WriteArticleResult(false, error = err)
-                }
+            callChat(
+                apiKey,
+                systemPrompt = "You are a professional news journalist. Write clear, factual, engaging articles in formal English. Never invent facts. Output the article directly — no preamble, no commentary.",
+                userPrompt = prompt
+            ).let { (ok, text, err) ->
+                if (ok) WriteArticleResult(true, text)
+                else WriteArticleResult(false, error = err)
+            }
         } catch (e: Exception) {
             WriteArticleResult(false, error = e.message ?: "Sarvam write error")
         }
     }
 
-    // ─── ROLE 2: Backup SEO generator ─────────────────────────────────────────
+    // ─── ROLE 2: Backup SEO generator ────────────────────────────────────
 
-    /**
-     * Generate SEO metadata using sarvam-m when Gemini SEO fails.
-     * Returns the same GeminiApiClient.SeoData type for pipeline compatibility.
-     */
     fun generateSeoData(
         title: String,
         articleContent: String,
@@ -146,29 +147,69 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         }
     }
 
-    // ─── ROLE 3: Grammar & spelling ───────────────────────────────────────────
+    // ─── ROLE 3: Grammar & spelling check via sarvam-m chat ────────────────────
 
+    /**
+     * Grammar and spelling correction using sarvam-m chat model.
+     *
+     * Processes the article in 1800-character chunks to stay within
+     * context limits. Each chunk is corrected independently and
+     * reassembled in order.
+     *
+     * IMPORTANT: Only fixes grammar/spelling — does NOT change facts,
+     * tone, or article structure. If Sarvam key is not set, returns
+     * original content unchanged (non-blocking).
+     */
     suspend fun checkGrammarAndSpelling(content: String): GrammarCheckResult {
         val apiKey = keyManager.getSarvamKey()
-        if (apiKey.isBlank()) return GrammarCheckResult(
-            true, content, error = "Sarvam key not set; grammar check skipped"
-        )
+        if (apiKey.isBlank()) {
+            Log.w("SarvamClient", "[ROLE 3] Sarvam key not set — skipping grammar check")
+            return GrammarCheckResult(
+                true, content,
+                error = "Sarvam key not configured; grammar check skipped"
+            )
+        }
+
         return try {
-            val chunks = splitIntoChunks(content, 2000)
+            Log.i("SarvamClient", "[ROLE 3] Running grammar+spelling check with sarvam-m")
+            val chunks = splitIntoChunks(content, 1800)
             val corrected = mutableListOf<String>()
-            for (chunk in chunks) {
-                val result = callSarvamTranslate(apiKey, chunk)
-                corrected.add(if (result.success) result.correctedText else chunk)
+
+            for ((i, chunk) in chunks.withIndex()) {
+                Log.d("SarvamClient", "[ROLE 3] Correcting chunk ${i + 1}/${chunks.size}")
+                val (ok, text, err) = callChatSync(
+                    apiKey,
+                    systemPrompt = """
+                        You are a professional English copy editor specialising in news journalism.
+                        Your ONLY job is grammar and spelling correction.
+                        CRITICAL RULES:
+                        - Fix ONLY grammar mistakes and spelling errors.
+                        - Do NOT change any facts, names, numbers, dates, or statistics.
+                        - Do NOT rewrite sentences unless grammar is broken.
+                        - Do NOT add or remove content.
+                        - Do NOT add any preamble, notes, or commentary.
+                        - Output ONLY the corrected text — nothing else.
+                    """.trimIndent(),
+                    userPrompt = """
+                        Correct only the grammar and spelling in the following news article text.
+                        Output the corrected text only — no preamble, no explanation:
+
+                        $chunk
+                    """.trimIndent()
+                )
+                corrected.add(if (ok && text.isNotBlank()) text else chunk)
+                if (!ok) Log.w("SarvamClient", "[ROLE 3] Chunk ${i + 1} error: $err")
             }
+
             GrammarCheckResult(true, corrected.joinToString(" "))
         } catch (e: Exception) {
-            GrammarCheckResult(false, content, error = e.message ?: "Error")
+            Log.e("SarvamClient", "[ROLE 3] Grammar check error: ${e.message}")
+            GrammarCheckResult(false, content, error = e.message ?: "Grammar check error")
         }
     }
 
-    // ─── Shared chat call ─────────────────────────────────────────────────────
+    // ─── Shared chat calls ───────────────────────────────────────────────────
 
-    /** Returns Triple(success, content, error) */
     private fun callChatSync(
         apiKey: String,
         systemPrompt: String,
@@ -182,7 +223,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             val body = JsonObject().apply {
                 addProperty("model",       "sarvam-m")
                 add("messages",            messages)
-                addProperty("temperature", 0.7)
+                addProperty("temperature", 0.3)
                 addProperty("max_tokens",  2048)
             }
             val response = client.newCall(
@@ -228,42 +269,20 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             "--- ORIGINAL ARTICLE ---\n${full.take(3500)}\n---\nSummary: $desc"
         else "Summary: $desc"
         return """
+            ███ CRITICAL OUTPUT RULES ███
+            - Output the final news article ONLY.
+            - Do NOT include thinking, reasoning, or any preamble.
+            - Do NOT start with "Okay", "Let me", "I'll", "Sure", "First", or any intro text.
+            - Begin IMMEDIATELY with the SEO headline.
+            █████████████████████████████
+
             Write a complete professional news article.
             Headline : $title
             Category : $category
             Target   : ~$maxWords words
             $source
-            Requirements: strong lead, formal tone, rewrite in own words, new SEO headline first.
+            Requirements: strong lead paragraph, formal tone, rewrite in own words, new SEO headline first.
         """.trimIndent()
-    }
-
-    private fun callSarvamTranslate(apiKey: String, text: String): GrammarCheckResult {
-        return try {
-            val body = JsonObject().apply {
-                addProperty("input", text)
-                addProperty("source_language_code", "en-IN")
-                addProperty("target_language_code", "en-IN")
-                addProperty("speaker_gender", "Male")
-                addProperty("mode", "formal")
-                addProperty("model", "mayura:v1")
-                addProperty("enable_preprocessing", true)
-            }
-            val resp = client.newCall(
-                Request.Builder()
-                    .url("https://api.sarvam.ai/translate")
-                    .addHeader("api-subscription-key", apiKey)
-                    .addHeader("Content-Type", "application/json")
-                    .post(body.toString().toRequestBody(jsonMedia))
-                    .build()
-            ).execute()
-            val rb = resp.body?.string() ?: ""
-            if (resp.isSuccessful) {
-                val translated = JsonParser.parseString(rb).asJsonObject.get("translated_text")?.asString ?: text
-                GrammarCheckResult(true, translated.ifBlank { text })
-            } else GrammarCheckResult(false, text, error = "HTTP ${resp.code}")
-        } catch (e: Exception) {
-            GrammarCheckResult(false, text, error = e.message ?: "Error")
-        }
     }
 
     private fun splitIntoChunks(text: String, size: Int): List<String> {
@@ -272,12 +291,12 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         val buf = StringBuilder()
         for (sentence in text.split(". ")) {
             if (buf.length + sentence.length > size) {
-                if (buf.isNotEmpty()) chunks.add(buf.toString())
+                if (buf.isNotEmpty()) chunks.add(buf.toString().trim())
                 buf.clear()
             }
             buf.append(sentence).append(". ")
         }
-        if (buf.isNotEmpty()) chunks.add(buf.toString())
+        if (buf.isNotEmpty()) chunks.add(buf.toString().trim())
         return chunks
     }
 }
