@@ -29,7 +29,22 @@ import kotlinx.coroutines.withContext
  * A ChatGPT-style in-app AI assistant branded as "David AI".
  * Powered by Sarvam AI for conversation and Gemini for article generation.
  *
- * NOTE: SarvamChatClient uses a hardcoded DEV_API_KEY — no key is read from Settings here.
+ * NEW FEATURES:
+ *   1. Weather Awareness   — fetches real-time location-based weather via Open-Meteo
+ *                             (free, no API key) and injects it into every AI conversation
+ *                             so David AI can answer weather questions contextually.
+ *
+ *   2. Article Generation  — when user types a command like:
+ *                             "generate article about [topic]"
+ *                             "write news about [topic]"
+ *                             "article about [topic]"
+ *                             David AI generates a full original draft with:
+ *                             - Title, Summary, Full HTML content
+ *                             - Image search reference for Wikipedia/Wikimedia
+ *                             - Category + SEO tags
+ *
+ * Permissions needed:
+ *   ACCESS_FINE_LOCATION / ACCESS_COARSE_LOCATION (requested at runtime)
  */
 class DavidAiChatActivity : AppCompatActivity() {
 
@@ -47,7 +62,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
         val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-                      grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+                grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) fetchWeatherSilently()
     }
 
@@ -69,7 +84,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         requestLocationAndFetchWeather()
     }
 
-    // ── Weather ───────────────────────────────────────────────────────────────────
+    // ── Weather ────────────────────────────────────────────────────────────────
 
     private fun requestLocationAndFetchWeather() {
         val fine   = Manifest.permission.ACCESS_FINE_LOCATION
@@ -92,7 +107,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
     }
 
-    // ── RecyclerView & Input ───────────────────────────────────────────────────────
+    // ── RecyclerView & Input ─────────────────────────────────────────────────
 
     private fun setupRecyclerView() {
         adapter = ChatMessageAdapter()
@@ -114,22 +129,22 @@ class DavidAiChatActivity : AppCompatActivity() {
     private fun showWelcomeMessage() {
         adapter.addMessage(
             ChatMessage(
-                content = "Hello! I'm David AI, your intelligent news assistant created by David and " +
-                    "powered by Nexuzy Lab.\n\nI can help you with:\n" +
-                    "• News article writing & ideas\n" +
-                    "• 🌦️ Real-time weather for your location\n" +
-                    "• 📝 Article generation — try: \"generate article about [topic]\"\n" +
-                    "• SEO optimization tips\n" +
-                    "• WordPress publishing help\n" +
-                    "• Fact-checking & research\n" +
-                    "• General knowledge questions\n\n" +
-                    "What would you like today?",
+                content = "Hello! I\'m David AI, your intelligent news assistant created by David and " +
+                        "powered by Nexuzy Lab.\n\nI can help you with:\n" +
+                        "\u2022 News article writing & ideas\n" +
+                        "\u2022 \uD83C\uDF26\uFE0F Real-time weather for your location\n" +
+                        "\u2022 \uD83D\uDCDD Article generation — try: \"generate article about [topic]\"\n" +
+                        "\u2022 SEO optimization tips\n" +
+                        "\u2022 WordPress publishing help\n" +
+                        "\u2022 Fact-checking & research\n" +
+                        "\u2022 General knowledge questions\n\n" +
+                        "What would you like today?",
                 isUser = false
             )
         )
     }
 
-    // ── Message sending ──────────────────────────────────────────────────────────
+    // ── Message sending ────────────────────────────────────────────────────────
 
     private fun sendMessage() {
         val text = binding.etMessage.text?.toString()?.trim()
@@ -141,6 +156,7 @@ class DavidAiChatActivity : AppCompatActivity() {
 
         setInputEnabled(false)
 
+        // Check if this is an article generation command
         val articleTopic = ArticleGeneratorClient.extractTopic(text)
         if (articleTopic != null) {
             handleArticleGeneration(text, articleTopic)
@@ -149,14 +165,15 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
     }
 
-    // ── Article Generation Handler ───────────────────────────────────────────────
+    // ── Article Generation Handler ───────────────────────────────────────────
 
     private fun handleArticleGeneration(originalText: String, topic: String) {
         val finalTopic = topic.ifBlank {
+            // User typed just "generate article" with no topic — ask for it
             setInputEnabled(true)
             adapter.addMessage(ChatMessage(
-                content = "📝 What topic should I write about?\n" +
-                    "Example: \"generate article about climate change in India\"",
+                content = "\uD83D\uDCDD What topic should I write about?\n" +
+                        "Example: \"generate article about climate change in India\"",
                 isUser = false
             ))
             scrollToBottom()
@@ -164,7 +181,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
 
         adapter.addMessage(ChatMessage(
-            content = "⏳ Generating article about \"$finalTopic\"... This may take 10-20 seconds.",
+            content = "\u23F3 Generating article about \"$finalTopic\"... This may take 10-20 seconds.",
             isUser = false
         ))
         scrollToBottom()
@@ -183,9 +200,10 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
     }
 
-    // ── Normal Sarvam Chat Handler ───────────────────────────────────────────────
+    // ── Normal Sarvam Chat Handler ────────────────────────────────────────────
 
     private fun handleNormalChat(text: String) {
+        // Inject weather context as a system-level prefix if available and relevant
         val weatherTriggers = listOf("weather", "temperature", "rain", "sunny", "cold", "hot", "humid", "wind", "forecast", "climate")
         val isWeatherQuery = weatherTriggers.any { text.lowercase().contains(it) }
 
@@ -198,8 +216,7 @@ class DavidAiChatActivity : AppCompatActivity() {
 
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {
-                // DEV_API_KEY is hardcoded inside SarvamChatClient — no key needed here
-                SarvamChatClient.chat(history = conversationHistory.toList())
+                SarvamChatClient.chat(conversationHistory.toList())
             }
 
             binding.tvTyping.visibility = View.GONE
@@ -217,7 +234,7 @@ class DavidAiChatActivity : AppCompatActivity() {
         }
     }
 
-    // ── Utilities ───────────────────────────────────────────────────────────────────
+    // ── Utilities ────────────────────────────────────────────────────────────────
 
     private fun newChat() {
         conversationHistory.clear()
