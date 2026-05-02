@@ -7,7 +7,6 @@
     android:background="@color/background"
     android:fitsSystemWindows="true">
 
-    <!-- Toolbar -->
     <androidx.appcompat.widget.Toolbar
         android:id="@+id/toolbarDavidAi"
         android:layout_width="0dp"
@@ -20,7 +19,18 @@
         app:title="David AI"
         app:titleTextColor="@color/text_primary" />
 
-    <!-- Typing indicator -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvChat"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clipToPadding="false"
+        android:paddingBottom="8dp"
+        android:scrollbars="none"
+        app:layout_constraintBottom_toTopOf="@+id/tvTyping"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/toolbarDavidAi" />
+
     <TextView
         android:id="@+id/tvTyping"
         android:layout_width="wrap_content"
@@ -34,20 +44,6 @@
         app:layout_constraintBottom_toTopOf="@+id/inputBarLayout"
         app:layout_constraintStart_toStartOf="parent" />
 
-    <!-- Chat messages -->
-    <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvChat"
-        android:layout_width="0dp"
-        android:layout_height="0dp"
-        android:clipToPadding="false"
-        android:paddingBottom="8dp"
-        android:scrollbars="none"
-        app:layout_constraintBottom_toTopOf="@+id/tvTyping"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/toolbarDavidAi" />
-
-    <!-- Input bar -->
     <LinearLayout
         android:id="@+id/inputBarLayout"
         android:layout_width="0dp"
@@ -64,12 +60,6 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent">
 
-        <!--
-            imeOptions="actionSend" → keyboard shows a Send key instead of newline.
-            inputType="textMultiLine" keeps multi-line input; the two attributes
-            work together on all Android keyboards (Gboard, Samsung, etc.).
-            User can now press Send on keyboard OR tap the send button.
-        -->
         <EditText
             android:id="@+id/etMessage"
             android:layout_width="0dp"
@@ -97,7 +87,8 @@
             android:background="@drawable/bg_send_button"
             android:contentDescription="Send"
             android:src="@drawable/ic_send"
-            android:scaleType="center" />
+            android:scaleType="center"
+            android:padding="10dp" />
 
     </LinearLayout>
 

@@ -60,7 +60,8 @@
             android:background="@drawable/bg_send_button"
             android:contentDescription="Send"
             android:src="@drawable/ic_send"
-            android:scaleType="center" />
+            android:scaleType="center"
+            android:padding="10dp" />
 
     </LinearLayout>
 
