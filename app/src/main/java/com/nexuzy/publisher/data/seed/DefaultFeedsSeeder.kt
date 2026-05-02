@@ -16,7 +16,8 @@ import com.nexuzy.publisher.data.model.RssFeed
  *   - China                   : ~10%
  *   - Other international     : balance
  *
- * Call seedIfEmpty() once on app start — it is a no-op if feeds already exist.
+ * Call seedIfEmpty() once on app start — it now also fills in any
+ * default feeds that were deleted or never seeded (URL-based dedup).
  * Users can delete ANY feed (including defaults) and add their own custom URLs.
  */
 object DefaultFeedsSeeder {
@@ -26,14 +27,24 @@ object DefaultFeedsSeeder {
     suspend fun seedIfEmpty(context: Context) {
         val db  = AppDatabase.getDatabase(context)
         val dao = db.rssFeedDao()
-        val count = dao.getCount()          // fixed: was getFeedCount()
-        if (count > 0) {
-            Log.i(TAG, "DB already has $count feeds — skipping seed.")
-            return
+
+        val existingUrls = dao.getAllOnce().map { it.url }.toSet()
+
+        if (existingUrls.isEmpty()) {
+            // Fresh install — insert all default feeds
+            val feeds = buildFeedList()
+            feeds.forEach { dao.insert(it) }
+            Log.i(TAG, "Seeded ${feeds.size} RSS feeds into DB.")
+        } else {
+            // Re-seed only missing default feeds (handles partial deletes / upgrades)
+            val missing = buildFeedList().filter { it.url !in existingUrls }
+            if (missing.isNotEmpty()) {
+                missing.forEach { dao.insert(it) }
+                Log.i(TAG, "Re-seeded ${missing.size} missing default feeds.")
+            } else {
+                Log.i(TAG, "DB already has all default feeds — skipping seed.")
+            }
         }
-        val feeds = buildFeedList()
-        feeds.forEach { dao.insert(it) }    // fixed: was dao.insertAll(feeds)
-        Log.i(TAG, "Seeded ${feeds.size} RSS feeds into DB.")
     }
 
     private fun buildFeedList(): List<RssFeed> = listOf(
@@ -209,39 +220,17 @@ object DefaultFeedsSeeder {
         f("9to5Google",                       "https://9to5google.com/feed/", "Tech"),
         f("9to5Mac",                          "https://9to5mac.com/feed/", "Tech"),
         f("Engadget",                         "https://www.engadget.com/rss.xml", "Tech"),
-        f("CNET",                             "https://www.cnet.com/rss/all/", "Tech"),
-        f("Gizmodo",                          "https://gizmodo.com/rss", "Tech"),
-        f("KrASIA – Tech",                    "https://kr.asia/feed", "Tech"),
-        f("Tech in Asia",                     "https://www.techinasia.com/feed", "Tech"),
-
-        // ══════════════════════════════════════════════════════════════════════
-        // TECHNOLOGY
-        // ══════════════════════════════════════════════════════════════════════
-        f("MIT Technology Review",            "https://www.technologyreview.com/feed/", "Technology"),
-        f("Wired",                            "https://www.wired.com/feed/rss", "Technology"),
-        f("IEEE Spectrum",                    "https://spectrum.ieee.org/feeds/feed.rss", "Technology"),
-        f("GitHub Blog",                      "https://github.blog/feed/", "Technology"),
-        f("ZDNet",                            "https://www.zdnet.com/news/rss.xml", "Technology"),
-        f("InfoQ",                            "https://feed.infoq.com/", "Technology"),
-        f("TechRepublic",                     "https://www.techrepublic.com/rssfeeds/articles/", "Technology"),
-        f("Computerworld",                    "https://www.computerworld.com/index.rss", "Technology"),
-        f("VentureBeat",                      "https://venturebeat.com/feed/", "Technology"),
-        f("Hacker News (top)",                "https://hnrss.org/frontpage", "Technology"),
-        f("South China Morning Post – Tech",  "https://www.scmp.com/rss/36/feed", "Technology"),
-
-        // ══════════════════════════════════════════════════════════════════════
-        // TRAVEL
-        // ══════════════════════════════════════════════════════════════════════
-        f("Lonely Planet News",               "https://www.lonelyplanet.com/news/feed", "Travel"),
-        f("Condé Nast Traveller",             "https://www.cntraveller.com/feed/rss", "Travel"),
-        f("National Geographic Travel",       "https://www.nationalgeographic.com/travel/rss", "Travel"),
-        f("Travel + Leisure",                 "https://www.travelandleisure.com/rss", "Travel"),
-        f("Skift",                            "https://skift.com/feed/", "Travel"),
-        f("The Points Guy",                   "https://thepointsguy.com/feed/", "Travel"),
-        f("Nomadic Matt",                     "https://www.nomadicmatt.com/feed/", "Travel"),
-        f("Atlas Obscura",                    "https://www.atlasobscura.com/feeds/latest", "Travel")
+        f("CNET",                             "https://www.cnet.com/rss/news/", "Tech"),
+        f("Mashable",                         "https://mashable.com/feeds/rss/all", "Tech"),
+        f("Gizmodo",                          "https://gizmodo.com/feed", "Tech"),
+        f("ZDNet",                            "https://www.zdnet.com/news/rss.xml", "Tech"),
+        f("Slashdot",                         "https://rss.slashdot.org/Slashdot/slashdotMain", "Tech"),
+        f("Hacker News (top)",                "https://hnrss.org/frontpage", "Tech"),
+        f("Dev.to",                           "https://dev.to/feed", "Tech"),
+        f("GitHub Blog",                      "https://github.blog/feed/", "Tech")
     )
 
+    /** Shorthand builder — all seeded feeds are marked isDefault=true and isActive=true */
     private fun f(name: String, url: String, category: String) = RssFeed(
         name      = name,
         url       = url,

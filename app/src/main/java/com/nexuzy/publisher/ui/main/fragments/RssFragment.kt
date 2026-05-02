@@ -20,6 +20,7 @@ import com.nexuzy.publisher.data.model.WpCategory
 import com.nexuzy.publisher.data.model.WordPressSite
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
 import com.nexuzy.publisher.data.prefs.AppPreferences
+import com.nexuzy.publisher.data.seed.DefaultFeedsSeeder
 import com.nexuzy.publisher.databinding.FragmentRssBinding
 import com.nexuzy.publisher.network.WordPressApiClient
 import com.nexuzy.publisher.ui.main.NewsViewModel
@@ -37,7 +38,6 @@ class RssFragment : Fragment() {
     private val newsViewModel: NewsViewModel by activityViewModels()
     private val wpClient = WordPressApiClient()
 
-    // Firestore repository for syncing RSS feeds and API keys to Firebase
     private lateinit var firestoreRepo: FirestoreUserRepository
 
     override fun onCreateView(
@@ -52,7 +52,6 @@ class RssFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        // Initialise Firestore repo
         val keyManager = ApiKeyManager(requireContext())
         firestoreRepo  = FirestoreUserRepository(keyManager, AppPreferences(requireContext()))
 
@@ -62,17 +61,33 @@ class RssFragment : Fragment() {
 
         val db = AppDatabase.getDatabase(requireContext())
 
-        // Observe local Room feeds.
-        // If the DB is empty (fresh install / reinstall), auto-restore from Firebase.
+        // ── STEP 1: Ensure default feeds are always present ───────────────────
+        // Run seedIfEmpty every time the fragment loads. It is a fast no-op when
+        // all default feeds are already in the DB (URL-based dedup inside seeder).
+        viewLifecycleOwner.lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                DefaultFeedsSeeder.seedIfEmpty(requireContext())
+            }
+            // Show active feed count hint after seeding
+            val activeCount = withContext(Dispatchers.IO) {
+                db.rssFeedDao().getActiveCount()
+            }
+            binding.tvFeedCount?.text = "$activeCount active feeds ready to fetch"
+            binding.tvFeedCount?.isVisible = true
+        }
+
+        // ── STEP 2: Observe live feed list ────────────────────────────────────
         db.rssFeedDao().getAllFeeds().observe(viewLifecycleOwner) { feeds ->
             adapter.submitList(feeds)
 
+            // Only try Firestore restore when DB is truly empty
+            // (after seeder ran — means user has no default AND no cloud feeds)
             if (feeds.isEmpty()) {
                 restoreFeedsFromFirebase(db)
             }
         }
 
-        // Populate category dropdown if ViewModel already has cached WP categories
+        // ── WP Categories ─────────────────────────────────────────────────────
         newsViewModel.wpCategories.observe(viewLifecycleOwner) { cats ->
             if (cats.isNotEmpty()) {
                 val names = cats.map { it.name }
@@ -87,7 +102,6 @@ class RssFragment : Fragment() {
             }
         }
 
-        // Load WP Categories button
         binding.btnLoadWpCategories.setOnClickListener {
             val siteUrl  = keyManager.getWordPressSiteUrl().trim()
             val username = keyManager.getWordPressUsername().trim()
@@ -115,9 +129,6 @@ class RssFragment : Fragment() {
                         username    = username,
                         appPassword = password
                     )
-
-                    // Fetch from WordPressApiClient (returns WordPressApiClient.WpCategory)
-                    // then map to data.model.WpCategory so the ViewModel type is satisfied.
                     val cats: List<WpCategory> = withContext(Dispatchers.IO) {
                         wpClient.fetchCategories(site).map { wc ->
                             WpCategory(
@@ -128,7 +139,6 @@ class RssFragment : Fragment() {
                             )
                         }
                     }
-
                     newsViewModel.setWpCategories(cats)
                     binding.btnLoadWpCategories.isEnabled = true
                     binding.btnLoadWpCategories.text = "\uD83D\uDCC2 Load"
@@ -154,7 +164,7 @@ class RssFragment : Fragment() {
             }
         }
 
-        // Observe fetching state to disable button while fetching is in progress
+        // ── Fetching state ────────────────────────────────────────────────────
         newsViewModel.isFetching.observe(viewLifecycleOwner) { fetching ->
             binding.btnFetchLatestNews.isEnabled = !fetching
             binding.btnFetchLatestNews.text =
@@ -178,12 +188,17 @@ class RssFragment : Fragment() {
             }
 
             viewLifecycleOwner.lifecycleScope.launch {
-                // 1. Save to local Room DB
                 val insertedId = withContext(Dispatchers.IO) {
-                    db.rssFeedDao().insert(RssFeed(name = name, url = url, category = category))
+                    db.rssFeedDao().insert(
+                        RssFeed(
+                            name      = name,
+                            url       = url,
+                            category  = category,
+                            isActive  = true,
+                            isDefault = false
+                        )
+                    )
                 }
-
-                // 2. Sync to Firebase Firestore (background, non-blocking)
                 launch(Dispatchers.IO) {
                     firestoreRepo.addRssFeedToFirestore(
                         rssId    = insertedId.toString(),
@@ -192,7 +207,6 @@ class RssFragment : Fragment() {
                         category = category
                     )
                 }
-
                 binding.etFeedName.setText("")
                 binding.etFeedUrl.setText("")
                 binding.actvFeedCategory.setText("")
@@ -206,8 +220,24 @@ class RssFragment : Fragment() {
 
         // ── Fetch Latest News ─────────────────────────────────────────────────
         binding.btnFetchLatestNews.setOnClickListener {
-            newsViewModel.setFetching(true)
             viewLifecycleOwner.lifecycleScope.launch {
+                // Make sure feeds exist before fetching
+                val activeCount = withContext(Dispatchers.IO) {
+                    db.rssFeedDao().getActiveCount()
+                }
+                if (activeCount == 0) {
+                    Toast.makeText(
+                        requireContext(),
+                        "\u26a0\ufe0f No active feeds found. Seeding defaults\u2026",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    withContext(Dispatchers.IO) {
+                        DefaultFeedsSeeder.seedIfEmpty(requireContext())
+                    }
+                    return@launch
+                }
+
+                newsViewModel.setFetching(true)
                 try {
                     val snapshot = withContext(Dispatchers.IO) {
                         NewsWorkflowManager(requireContext()).fetchTodayHotNews(limitPerFeed = 20)
@@ -222,7 +252,7 @@ class RssFragment : Fragment() {
                     if (total == 0) {
                         Toast.makeText(
                             requireContext(),
-                            "No news found. Check your RSS feeds in the list above.",
+                            "No news found. Check your RSS feeds or internet connection.",
                             Toast.LENGTH_LONG
                         ).show()
                     } else {
@@ -245,29 +275,20 @@ class RssFragment : Fragment() {
         }
     }
 
-    // ── Delete RSS feed from Room + Firestore ─────────────────────────────────
+    // ── Delete RSS feed ───────────────────────────────────────────────────────
     private fun deleteFeed(feed: RssFeed) {
         viewLifecycleOwner.lifecycleScope.launch {
-            // 1. Delete from local Room DB
             withContext(Dispatchers.IO) {
                 AppDatabase.getDatabase(requireContext()).rssFeedDao().delete(feed)
             }
-
-            // 2. Sync deletion to Firebase Firestore
             launch(Dispatchers.IO) {
                 firestoreRepo.deleteRssFeedFromFirestore(feed.id.toString())
             }
-
             Toast.makeText(requireContext(), "RSS feed deleted", Toast.LENGTH_SHORT).show()
         }
     }
 
-    // ── Restore RSS feeds from Firebase when local DB is empty ────────────────
-    /**
-     * Called once when the feed list is observed to be empty.
-     * Downloads the user's saved RSS feeds from Firestore and inserts them into Room.
-     * This handles reinstall / new device scenarios automatically.
-     */
+    // ── Restore from Firebase (only when DB is empty after seeding) ───────────
     private fun restoreFeedsFromFirebase(db: AppDatabase) {
         viewLifecycleOwner.lifecycleScope.launch {
             try {
@@ -281,7 +302,8 @@ class RssFragment : Fragment() {
                                 RssFeed(
                                     name     = entry.name,
                                     url      = entry.url,
-                                    category = entry.category
+                                    category = entry.category,
+                                    isActive = true
                                 )
                             )
                         }
@@ -291,9 +313,17 @@ class RssFragment : Fragment() {
                         "\uD83D\uDD04 ${cloudFeeds.size} RSS feeds restored from your account",
                         Toast.LENGTH_LONG
                     ).show()
+                } else {
+                    // Firestore also empty — seed defaults as last resort
+                    withContext(Dispatchers.IO) {
+                        DefaultFeedsSeeder.seedIfEmpty(requireContext())
+                    }
                 }
             } catch (e: Exception) {
-                // Silent failure — user can add feeds manually
+                // Network error — seed defaults so the app is still usable offline
+                withContext(Dispatchers.IO) {
+                    DefaultFeedsSeeder.seedIfEmpty(requireContext())
+                }
             }
         }
     }
