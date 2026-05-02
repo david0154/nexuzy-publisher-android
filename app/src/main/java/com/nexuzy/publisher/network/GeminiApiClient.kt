@@ -31,6 +31,15 @@ import java.util.concurrent.TimeUnit
  * - topP 0.97 for broader vocabulary selection
  * - Prompt rewritten as a seasoned journalist persona — no bullet rules, no AI instructions
  * - Explicitly forbids AI-style openers, structured headers, and robotic transitions
+ *
+ * MODEL CHAIN FIX (v4):
+ * - gemini-1.5-flash and gemini-1.5-flash-8b removed — both return HTTP 404 on v1 API
+ * - Working chain: gemini-2.0-flash → gemini-2.0-flash-lite → gemini-1.5-pro → gemini-1.0-pro
+ * - Non-quota 404 errors now treated as model-skip (not hard fail) so rotation continues
+ *
+ * SEO PARSE FIX (v4):
+ * - Sarvam backup SEO returns <think>...</think> block before JSON
+ * - parseSeoResponse() now strips <think> blocks before JSON extraction
  */
 class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -42,11 +51,12 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
     private val baseUrl = "https://generativelanguage.googleapis.com/v1/models"
 
+    // gemini-1.5-flash and gemini-1.5-flash-8b return HTTP 404 on the v1 API — removed.
     private val MODEL_CHAIN = listOf(
         "gemini-2.0-flash",
-        "gemini-1.5-flash",
         "gemini-2.0-flash-lite",
-        "gemini-1.5-flash-8b"
+        "gemini-1.5-pro",
+        "gemini-1.0-pro"
     )
 
     data class GeminiResult(
@@ -123,6 +133,13 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                     continue
                 }
 
+                // Treat 404 (model not found) as a skip — try next model instead of hard-failing
+                if (isModelNotFound(result.error)) {
+                    Log.w("GeminiClient", "Key ${keyIndex + 1} / $modelName not found (404), skipping model")
+                    lastError = result.error
+                    continue
+                }
+
                 if (result.content.isBlank() && result.error.contains("Empty response", ignoreCase = true)) {
                     Log.w("GeminiClient", "Key ${keyIndex + 1} / $modelName returned empty (safety/block), trying next model")
                     lastError = result.error
@@ -174,6 +191,10 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                 if (result.success) return@withContext parseSeoResponse(result.content)
                 if (isQuotaError(result.error)) {
                     Log.w("GeminiClient", "SEO: Key ${keyIndex + 1}/$modelName quota exceeded, trying next")
+                    continue
+                }
+                if (isModelNotFound(result.error)) {
+                    Log.w("GeminiClient", "SEO: Key ${keyIndex + 1}/$modelName not found (404), skipping")
                     continue
                 }
                 if (result.content.isBlank() && result.error.contains("Empty response", ignoreCase = true)) {
@@ -304,7 +325,7 @@ Write the article now:
         - meta_keywords: 5-10 comma-separated keywords
         - focus_keyphrase: 2-4 words, most important search phrase
         - meta_description: 120-155 characters, compelling and includes focus keyphrase
-        - Respond ONLY with valid JSON, no extra text
+        - Respond ONLY with valid JSON, no extra text, no <think> blocks
     """.trimIndent()
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -313,10 +334,19 @@ Write the article now:
 
     private fun parseSeoResponse(raw: String): SeoData {
         return try {
-            val cleaned = raw.trim()
+            // Strip <think>...</think> reasoning blocks emitted by Sarvam/other models
+            val stripped = raw.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "").trim()
+            val cleaned = stripped
                 .removePrefix("```json").removePrefix("```")
                 .removeSuffix("```").trim()
-            val json = JsonParser.parseString(cleaned).asJsonObject
+            // Extract first JSON object in case there is any trailing text
+            val jsonStart = cleaned.indexOf('{')
+            val jsonEnd = cleaned.lastIndexOf('}')
+            if (jsonStart == -1 || jsonEnd == -1 || jsonEnd < jsonStart) {
+                return SeoData(false, error = "No JSON object found in SEO response")
+            }
+            val jsonStr = cleaned.substring(jsonStart, jsonEnd + 1)
+            val json = JsonParser.parseString(jsonStr).asJsonObject
             val tagsArr = json.getAsJsonArray("tags")
             val tags = (0 until tagsArr.size()).map { tagsArr[it].asString }
             SeoData(
@@ -327,7 +357,7 @@ Write the article now:
                 metaDescription = json.get("meta_description")?.asString ?: ""
             )
         } catch (e: Exception) {
-            Log.e("GeminiClient", "SEO parse error: ${e.message} | raw: $raw")
+            Log.e("GeminiClient", "parseSeoJson error: ${e.message} | raw=$raw")
             SeoData(false, error = "SEO parse failed: ${e.message}")
         }
     }
@@ -375,6 +405,12 @@ Write the article now:
         error.contains("RESOURCE_EXHAUSTED", ignoreCase = true) ||
         error.contains("rate limit", ignoreCase = true) ||
         error.contains("rateLimitExceeded", ignoreCase = true)
+
+    private fun isModelNotFound(error: String) =
+        error.contains("404") ||
+        error.contains("NOT_FOUND", ignoreCase = true) ||
+        error.contains("is not found for API version", ignoreCase = true) ||
+        error.contains("not supported for generateContent", ignoreCase = true)
 
     companion object {
         const val DEFAULT_MODEL = "gemini-2.0-flash"
