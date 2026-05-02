@@ -1,94 +1,71 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
+<androidx.constraintlayout.widget.ConstraintLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
     android:background="@color/background">
 
-    <!-- Toolbar -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="56dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:background="@color/primary">
-
-        <TextView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="🤖 AI Assistant"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:textColor="@color/white" />
-    </LinearLayout>
-
-    <!-- Empty / welcome hint -->
-    <TextView
-        android:id="@+id/tvChatEmpty"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Ask me anything about news publishing…"
-        android:textColor="@color/text_hint"
-        android:textSize="14sp"
-        android:gravity="center"
-        android:padding="24dp"
-        android:visibility="gone" />
-
-    <!-- Messages list -->
+    <!-- Chat message list -->
     <androidx.recyclerview.widget.RecyclerView
-        android:id="@+id/rvChatMessages"
-        android:layout_width="match_parent"
+        android:id="@+id/chatRecyclerView"
+        android:layout_width="0dp"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:paddingTop="8dp"
-        android:paddingBottom="8dp"
         android:clipToPadding="false"
-        android:overScrollMode="never" />
+        android:paddingBottom="8dp"
+        android:scrollbars="none"
+        app:layout_constraintBottom_toTopOf="@+id/inputBar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
 
     <!-- Input bar -->
     <LinearLayout
-        android:layout_width="match_parent"
+        android:id="@+id/inputBar"
+        android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="10dp"
         android:gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
         android:background="@color/surface"
-        android:elevation="4dp">
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
 
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/etChatInput"
+        <!-- Text input -->
+        <EditText
+            android:id="@+id/messageInput"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="Type a message…"
-            android:textSize="14sp"
-            android:textColor="@color/text_primary"
-            android:textColorHint="@color/text_hint"
-            android:background="@android:color/transparent"
-            android:imeOptions="actionSend"
+            android:background="@drawable/bg_chat_input"
+            android:hint="Ask anything…"
             android:inputType="textMultiLine|textCapSentences"
+            android:imeOptions="actionSend"
             android:maxLines="4"
-            android:paddingStart="4dp"
-            android:paddingEnd="4dp" />
+            android:minLines="1"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
+            android:textSize="15sp"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_hint" />
 
+        <!-- Send button -->
         <ImageButton
-            android:id="@+id/btnSendMessage"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:src="@android:drawable/ic_menu_send"
-            android:background="?attr/selectableItemBackgroundBorderless"
-            android:contentDescription="Send message"
-            app:tint="@color/primary"
-            android:layout_marginStart="8dp" />
+            android:id="@+id/sendButton"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_send_button"
+            android:contentDescription="Send"
+            android:src="@drawable/ic_send"
+            android:scaleType="center" />
 
     </LinearLayout>
 
-</LinearLayout>
+</androidx.constraintlayout.widget.ConstraintLayout>
