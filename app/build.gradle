@@ -99,10 +99,10 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1'
 
     // ----------------------------------------------------------------
-    // Devil AI 2B - LiteRT-LM (Gemma 3n E2B on-device inference)
-    // Correct Google Maven artifact (NOT JitPack)
+    // Devil AI 2B - LiteRT-LM (on-device inference via Google AI Edge)
+    // litert-lm:1.0.1 does not exist on Maven; use the correct stable version
     // ----------------------------------------------------------------
-    implementation 'com.google.ai.edge.litert:litert-lm:1.0.1'
+    implementation 'com.google.ai.edge.litert:litert-lm:1.0.0-beta2'
 
     // ----------------------------------------------------------------
     // Testing
