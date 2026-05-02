@@ -97,12 +97,12 @@ The on-device writer is a **drop-in alternative** to the cloud Gemini step in th
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│  ON-DEVICE AI WRITER — Gemma 2B                                      │
+│  ON-DEVICE AI WRITER — Devil ai 2B                                      │
 ├──────────────────────────────────────────────────────────────────────┤
 │  Model      : Gemma 2B (INT4 quantised, ~1.4 GB)                     │
 │  Framework  : MediaPipe LLM Inference Task (tasks-genai)             │
 │  Runtime    : CPU / GPU delegate (auto-selected)                     │
-│  Storage    : /sdcard/Download/gemma-2b-it-q4_k_m.gguf               │
+│  Storage    : /sdcard/Download/devil2b-2b-it-q4_k_m.gguf               │
 │               OR /data/local/tmp/llm/ (push via adb)                 │
 │  Internet   : ❌ Not required                                         │
 │  API Key    : ❌ Not required                                         │
