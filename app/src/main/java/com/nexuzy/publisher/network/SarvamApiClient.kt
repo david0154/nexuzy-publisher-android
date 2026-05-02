@@ -14,26 +14,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
-/**
- * Sarvam AI API client.
- *
- * THREE ROLES:
- *
- * ROLE 1 — writeArticle():
- *   Backup article writer when ALL Gemini keys/models are exhausted.
- *   maxWords is clamped to 300–450 so Sarvam never over-runs its token budget.
- *   max_tokens set to 2048 — the maximum allowed on the starter subscription tier.
- *   Output is post-processed to strip AI thinking preamble and tags/footer junk.
- *
- * ROLE 2 — generateSeoData():
- *   Backup SEO generator when Gemini SEO also fails.
- *
- * ROLE 3 — checkGrammarAndSpelling():
- *   Grammar + spelling correction PLUS humanise pass after writing.
- *   Safe fallback: if Sarvam returns blank or errors, the ORIGINAL content
- *   is returned unchanged — never replaces good content with a broken response.
- *   max_tokens set to 2048 for grammar pass too (starter tier limit).
- */
 class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
     private val client = OkHttpClient.Builder()
@@ -43,31 +23,22 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
 
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
-    // ─── ARTICLE TOKEN BUDGET ─────────────────────────────────────────────────────────────
-    // Sarvam starter tier allows a maximum of 2048 output tokens.
-    // 450 words ≈ ~620 tokens output — well within the 2048 limit.
-    // Grammar chunks are ≤1800 chars so they also stay safely under 2048 tokens.
+    // Sarvam starter tier: max 2048 output tokens. 450 words ≈ 620 tokens.
     private val SARVAM_MAX_TOKENS = 2048
     private val SARVAM_MIN_WORDS  = 300
     private val SARVAM_MAX_WORDS  = 450
 
-    // ─── Regex patterns for post-processing article output ───────────────────────────────
-    // Strips AI thinking preamble lines that leak through at the top
+    // Thinking preamble prefixes to strip from top of output
     private val THINKING_PREFIXES = listOf(
         "okay, let's", "okay, i'll", "okay! let's", "let me ", "let's tackle",
         "let's think", "alright,", "sure! here", "sure, here", "here is",
         "here's the", "i need to", "i'll ", "i will ", "as requested,",
-        "of course,", "certainly,", "absolutely,"
+        "of course,", "certainly,", "absolutely,", "the user wants",
+        "the user is asking", "my task", "i'll start", "first, i'll",
+        "first i'll", "i'm going to", "i've been asked"
     )
-    // Regex to strip tags footer: matches "🏷️ Tags:", "Tags:", "#word" lines at end
-    private val TAGS_LINE_REGEX = Regex(
-        """(?im)^[\uFE0F🏷️\s]*tags?\s*:.*$"""
-    )
-    private val TRAILING_HASHTAG_REGEX = Regex(
-        """(?im)^(#\w+[\s·•\-]*){2,}$"""
-    )
-
-    // ─── Data classes ─────────────────────────────────────────────────────────────────────
+    private val TAGS_LINE_REGEX = Regex("""(?im)^[\uFE0F🏷️\s]*tags?\s*:.*$""")
+    private val TRAILING_HASHTAG_REGEX = Regex("""(?im)^(#\w+[\s·•\-]*){2,}$""")
 
     data class WriteArticleResult(
         val success: Boolean,
@@ -82,7 +53,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         val error: String = ""
     )
 
-    // ─── ROLE 1: Backup article writer ─────────────────────────────────────────────────────
+    // ─── ROLE 1: Backup article writer ───────────────────────────────────────
 
     suspend fun writeArticle(
         rssTitle: String,
@@ -93,23 +64,55 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
     ): WriteArticleResult {
         val apiKey = keyManager.getSarvamKey()
         if (apiKey.isBlank()) return WriteArticleResult(
-            false,
-            error = "Sarvam API key not configured. Add your key in Settings."
+            false, error = "Sarvam API key not configured. Add your key in Settings."
         )
 
         val safeWords = maxWords.coerceIn(SARVAM_MIN_WORDS, SARVAM_MAX_WORDS)
         Log.i("SarvamClient", "[ROLE 1] Writing article ($safeWords words) as Gemini backup")
 
+        // Attempt 1: full prompt
+        val attempt1 = tryWriteArticle(
+            apiKey, rssTitle, rssDescription, rssFullContent, category, safeWords,
+            useSimplePrompt = false
+        )
+        if (attempt1.success) return attempt1
+
+        // Attempt 2: stripped-down prompt (model returned only junk on first try)
+        Log.w("SarvamClient", "[ROLE 1] First attempt failed/junk — retrying with simpler prompt")
+        return tryWriteArticle(
+            apiKey, rssTitle, rssDescription, rssFullContent, category, safeWords,
+            useSimplePrompt = true
+        )
+    }
+
+    private suspend fun tryWriteArticle(
+        apiKey: String,
+        rssTitle: String,
+        rssDescription: String,
+        rssFullContent: String,
+        category: String,
+        safeWords: Int,
+        useSimplePrompt: Boolean
+    ): WriteArticleResult {
         return try {
-            val prompt = buildArticlePrompt(rssTitle, rssDescription, rssFullContent, category, safeWords)
+            val prompt = if (useSimplePrompt)
+                buildSimpleArticlePrompt(rssTitle, rssDescription, safeWords)
+            else
+                buildArticlePrompt(rssTitle, rssDescription, rssFullContent, category, safeWords)
+
+            val sysPrompt = if (useSimplePrompt)
+                "You are a news journalist. Write the article immediately. No preamble. No tags at the end."
+            else
+                "You are a seasoned news journalist with 15 years of experience. " +
+                "Write directly in a natural human voice — no preamble, no thinking out loud. " +
+                "Start immediately with the article headline. " +
+                "Do NOT include any Tags, hashtags, or bylines at the end."
+
             callChat(
                 apiKey,
-                systemPrompt = "You are a seasoned news journalist with 15 years of experience. " +
-                    "Write directly in a natural human voice — no preamble, no thinking out loud, no commentary. " +
-                    "Start immediately with the article headline. " +
-                    "Do NOT include any Tags, hashtags, or bylines at the end.",
+                systemPrompt = sysPrompt,
                 userPrompt = prompt,
-                temperature = 1.05,
+                temperature = if (useSimplePrompt) 0.8 else 1.05,
                 maxTokens = SARVAM_MAX_TOKENS,
                 frequencyPenalty = 0.4,
                 presencePenalty = 0.3
@@ -117,10 +120,10 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 if (ok && text.isNotBlank()) {
                     val cleaned = cleanArticleOutput(text)
                     if (cleaned.isBlank()) {
-                        Log.e("SarvamClient", "[ROLE 1] Output was entirely junk after cleaning")
+                        Log.e("SarvamClient", "[ROLE 1] Output entirely junk after cleaning (simplePrompt=$useSimplePrompt)")
                         WriteArticleResult(false, error = "Sarvam returned only preamble/junk")
                     } else {
-                        Log.i("SarvamClient", "[ROLE 1] Success — ${cleaned.split("\\s+".toRegex()).size} words written")
+                        Log.i("SarvamClient", "[ROLE 1] Success — ${cleaned.split("\\s+".toRegex()).size} words (simplePrompt=$useSimplePrompt)")
                         WriteArticleResult(true, cleaned)
                     }
                 } else {
@@ -134,50 +137,34 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         }
     }
 
-    /**
-     * Cleans raw Sarvam article output:
-     * 1. Strips AI thinking/preamble lines from the top
-     * 2. Strips "Tags:" footer lines and trailing hashtag lines from the bottom
-     */
+    // ─── Output cleaner ──────────────────────────────────────────────────────
+
     private fun cleanArticleOutput(raw: String): String {
         val lines = raw.lines().toMutableList()
 
-        // Strip thinking preamble from the top — drop leading lines that start with
-        // known AI planning phrases (case-insensitive). Stop as soon as a clean line is found.
+        // Strip thinking preamble from the top
         var startIdx = 0
         for (i in lines.indices) {
             val lower = lines[i].trim().lowercase()
-            val isThinking = THINKING_PREFIXES.any { lower.startsWith(it) }
-                || lower.isEmpty() // also skip blank preamble lines
-            if (isThinking) {
-                startIdx = i + 1
-            } else {
-                // First non-thinking non-blank line — stop stripping
-                break
-            }
+            val isJunk = lower.isEmpty() || THINKING_PREFIXES.any { lower.startsWith(it) }
+            if (isJunk) startIdx = i + 1 else break
         }
 
-        // Strip Tags footer and trailing hashtag blocks from the bottom
         var result = lines.drop(startIdx).joinToString("\n")
         result = TAGS_LINE_REGEX.replace(result, "")
         result = TRAILING_HASHTAG_REGEX.replace(result, "")
-
-        // Clean up extra blank lines left by removals
         result = result.replace(Regex("\n{3,}"), "\n\n").trim()
 
+        // Safety: if we stripped >70% of content something went wrong — fall back to tags-only clean
         if (result.length < raw.length * 0.3) {
-            // Sanity check: if we stripped more than 70% of content, something is wrong —
-            // return the raw version with only the tags footer stripped
             Log.w("SarvamClient", "[cleanArticleOutput] Over-stripped — falling back to tags-only clean")
             return TAGS_LINE_REGEX.replace(raw, "")
-                .replace(TRAILING_HASHTAG_REGEX, "")
-                .trim()
+                .replace(TRAILING_HASHTAG_REGEX, "").trim()
         }
-
         return result
     }
 
-    // ─── ROLE 2: Backup SEO generator ───────────────────────────────────────────────────
+    // ─── ROLE 2: Backup SEO generator ────────────────────────────────────────
 
     fun generateSeoData(
         title: String,
@@ -242,7 +229,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         }
     }
 
-    // ─── ROLE 3: Grammar check + Humanise pass ──────────────────────────────────────────
+    // ─── ROLE 3: Grammar check + Humanise pass ───────────────────────────────
 
     suspend fun checkGrammarAndSpelling(content: String): GrammarCheckResult {
         if (content.isBlank()) return GrammarCheckResult(true, content)
@@ -250,10 +237,7 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
         val apiKey = keyManager.getSarvamKey()
         if (apiKey.isBlank()) {
             Log.w("SarvamClient", "[ROLE 3] Sarvam key not set — skipping grammar/humanise step")
-            return GrammarCheckResult(
-                true, content,
-                error = "Sarvam key not configured; grammar check skipped"
-            )
+            return GrammarCheckResult(true, content, error = "Sarvam key not configured; grammar check skipped")
         }
 
         return try {
@@ -265,11 +249,9 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 Log.d("SarvamClient", "[ROLE 3] Processing chunk ${i + 1}/${chunks.size}")
                 val (ok, text, err) = callChatSync(
                     apiKey,
-                    systemPrompt = "You are a senior news editor at a major publication. " +
-                        "Your job is to fix grammar, fix spelling, strip any AI thinking text that leaked in, " +
-                        "and rewrite any robotic phrasing into natural journalist language. " +
-                        "Keep all facts, names, numbers and quotes exactly as they are. " +
-                        "Output only the rewritten text — no notes, no commentary, no tags, no hashtags.",
+                    systemPrompt = "You are a senior news editor. Fix grammar, spelling, and robotic phrasing. " +
+                        "Remove AI thinking text and tag lines. Keep all facts unchanged. " +
+                        "Output only the rewritten text — no notes, no tags, no hashtags.",
                     userPrompt = buildHumaniseChunkPrompt(chunk),
                     temperature = 1.0,
                     maxTokens = SARVAM_MAX_TOKENS,
@@ -278,25 +260,24 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
                 )
                 val safeResult = if (ok && text.isNotBlank()) cleanArticleOutput(text) else chunk
                 if (!ok || text.isBlank()) {
-                    Log.w("SarvamClient", "[ROLE 3] Chunk ${i + 1} returned blank/error ($err) — keeping original")
+                    Log.w("SarvamClient", "[ROLE 3] Chunk ${i + 1} error ($err) — keeping original")
                 }
                 corrected.add(safeResult)
             }
 
             val joined = corrected.joinToString(" ")
             if (joined.length < content.length / 2) {
-                Log.w("SarvamClient", "[ROLE 3] Result suspiciously short (${joined.length} vs ${content.length}) — returning original")
+                Log.w("SarvamClient", "[ROLE 3] Result too short — returning original")
                 return GrammarCheckResult(true, content, error = "Grammar result too short — original kept")
             }
-
             GrammarCheckResult(true, joined)
         } catch (e: Exception) {
-            Log.e("SarvamClient", "[ROLE 3] Error: ${e.message} — returning original content")
+            Log.e("SarvamClient", "[ROLE 3] Error: ${e.message} — returning original")
             GrammarCheckResult(false, content, error = e.message ?: "Grammar/humanise error")
         }
     }
 
-    // ─── Prompt builders ───────────────────────────────────────────────────────────────────
+    // ─── Prompt builders ─────────────────────────────────────────────────────
 
     private fun buildArticlePrompt(
         title: String, desc: String, full: String, category: String, maxWords: Int
@@ -306,55 +287,47 @@ class SarvamApiClient(private val keyManager: ApiKeyManager) {
             "--- SOURCE ARTICLE ---\n${full.take(3000)}\n--- END SOURCE ---\nRSS summary: $desc"
         else
             "RSS summary: $desc\n(Full article unavailable — write from title and summary.)"
-
         return """
-You are a seasoned news journalist with 15 years of experience writing for major digital publications.
-
-Today is $today. Write a fresh news article for the "$category" section.
+You are a seasoned news journalist. Today is $today. Write for the "$category" section.
 
 SOURCE MATERIAL:
 Headline: $title
 $source
 
-Write a compelling, publish-ready news article of approximately $maxWords words (between ${maxWords - 50} and ${maxWords + 50} words) based only on the facts above. Do not invent quotes, statistics, or events not present in the source.
-
-STRICT OUTPUT RULES — violating any of these will cause the article to be rejected:
-- Begin your response with the article headline. Nothing before it — no "Okay", no "Sure", no "Here is", no thinking text.
-- End your response with the last sentence of the article. Nothing after it — no Tags, no hashtags (#), no "Tags:", no bylines, no photo captions.
-- Pure article prose only: no bullet points, no section headers, no lists.
+STRICT OUTPUT RULES:
+- Start with the headline. Nothing before it.
+- End with the last sentence. No Tags, no hashtags, no bylines after it.
+- No bullet points, no section headers.
 
 WRITING STYLE:
-- Sharp, direct voice. Vary your sentence length.
-- First sentence drops the reader straight into the story.
-- Never use: "Furthermore", "Moreover", "In conclusion", "It is worth noting", "Delve into", "Notably", "Landscape", "In an era of", "Pivotal", "Shed light on".
-- Vary paragraph length. Some one sentence. Some three or four.
-- End naturally.
+- ~$maxWords words. Direct voice. Vary sentence length.
+- No AI openers. No "Furthermore", "Moreover", "Notably", "Pivotal", "Delve into".
+- Flowing prose only. End naturally.
 
 Write the article now:
         """.trimIndent()
     }
 
-    private fun buildHumaniseChunkPrompt(chunk: String): String {
-        return """
-You are a senior news editor. Fix the filed text below.
+    /** Simpler fallback prompt used on retry when the model returns only junk on first attempt. */
+    private fun buildSimpleArticlePrompt(
+        title: String, desc: String, maxWords: Int
+    ): String {
+        return "Write a $maxWords-word news article based on the following.\n" +
+            "Start with the headline. End with the last sentence. No tags, no hashtags.\n\n" +
+            "Headline: $title\nSummary: $desc\n\nArticle:"
+    }
 
-1. Remove any AI thinking text ("Okay, let's tackle this", "Let me", "I need to", "Sure", "Here is", or any planning text)
-2. Remove any tags/hashtag lines at the end (lines starting with # or containing "Tags:")
-3. Fix all grammar and spelling errors
-4. Rewrite robotic phrasing into natural journalist language
-5. Do NOT change any facts, names, numbers, quotes, or dates
-6. Do not use: "Furthermore", "Moreover", "Notably", "This underscores", "Pivotal", "Delve"
-
-Output only the rewritten article text. No notes, no commentary, no tags.
+    private fun buildHumaniseChunkPrompt(chunk: String) = """
+Fix the filed text below. Remove AI thinking text and tag lines. Fix grammar and robotic phrasing.
+Do NOT change facts, names, numbers, or dates. Output only the rewritten text.
 
 Filed text:
 $chunk
 
 Rewritten text:
-        """.trimIndent()
-    }
+    """.trimIndent()
 
-    // ─── Shared chat calls ───────────────────────────────────────────────────────────────────
+    // ─── Shared chat calls ───────────────────────────────────────────────────
 
     private fun callChatSync(
         apiKey: String,
