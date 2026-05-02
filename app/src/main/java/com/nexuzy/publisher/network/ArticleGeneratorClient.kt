@@ -8,6 +8,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
@@ -19,9 +22,15 @@ import java.util.concurrent.TimeUnit
  * PIPELINE:
  *   Step 1 — Try Gemini (all 4 models × all saved keys)
  *   Step 2 — If ALL Gemini keys exhausted → fall back to Sarvam AI (sarvam-m)
- *   Step 3 — Sarvam grammar + spelling correction (whoever wrote it)
- *   Step 4 — OpenAI Key 2 clean output (remove AI preamble/artifacts)
+ *   Step 3 — Sarvam grammar + humanise correction (whoever wrote it)
+ *   Step 4 — OpenAI Key 2 clean + humanise output
  *   Step 5 — Return clean ArticleDraft to caller
+ *
+ * HUMAN WRITING FIX (v2):
+ *   - Gemini temperature 0.8 → 1.05, topP 0.97, frequencyPenalty 0.4, presencePenalty 0.3
+ *   - buildGeminiPrompt rewritten as journalist persona (no bullet-rule OUTPUT RULES block)
+ *   - Sarvam fallback: corrected writeArticle() call args (rssTitle + rssDescription both = topic)
+ *   - Both Gemini and Sarvam paths go through full grammar+humanise → OpenAI clean pipeline
  */
 object ArticleGeneratorClient {
 
@@ -107,9 +116,17 @@ object ArticleGeneratorClient {
         } else {
             Log.w("ArticleGenerator", "All Gemini keys exhausted — falling back to Sarvam AI")
             val sarvamClient = SarvamApiClient(keyManager)
-            val sarvamResult = sarvamClient.writeArticle(topic, topic, "General")
+            // Pass topic as both rssTitle and rssDescription so Sarvam has full context
+            val sarvamResult = sarvamClient.writeArticle(
+                rssTitle       = topic,
+                rssDescription = topic,
+                rssFullContent = "",
+                category       = "General",
+                maxWords       = 800
+            )
             if (!sarvamResult.success || sarvamResult.content.isBlank()) {
-                return ArticleDraft(success = false, error = "Both Gemini and Sarvam AI are unavailable.")
+                return ArticleDraft(success = false, error = "Both Gemini and Sarvam AI are unavailable. " +
+                    "Please check your API keys in Settings.")
             }
             return buildSarvamDraft(topic, sarvamResult.content, keyManager)
         }
@@ -118,12 +135,12 @@ object ArticleGeneratorClient {
         val parsed = parseGeminiJson(rawContent)
             ?: return ArticleDraft(success = false, error = "Failed to parse Gemini article JSON")
 
-        // STEP 4: Sarvam grammar check
-        val sarvamClient = SarvamApiClient(keyManager)
+        // STEP 4: Sarvam grammar + humanise
+        val sarvamClient  = SarvamApiClient(keyManager)
         val grammarResult = sarvamClient.checkGrammarAndSpelling(parsed.content)
         val grammarChecked = if (grammarResult.success) grammarResult.correctedText else parsed.content
 
-        // STEP 5: OpenAI Key 2 clean
+        // STEP 5: OpenAI Key 2 clean + humanise
         val openAiClient = OpenAiApiClient(keyManager)
         val cleanResult  = openAiClient.cleanArticleOutput(parsed.title, grammarChecked)
         val finalContent = if (cleanResult.success && cleanResult.cleanedContent.isNotBlank())
@@ -136,15 +153,21 @@ object ArticleGeneratorClient {
     // Sarvam draft builder
     // ─────────────────────────────────────────────────────────────────────────
 
-    private suspend fun buildSarvamDraft(topic: String, rawText: String, keyManager: ApiKeyManager): ArticleDraft {
-        val lines     = rawText.trim().lines().filter { it.isNotBlank() }
-        val title     = lines.firstOrNull() ?: topic
-        val body      = if (lines.size > 1) lines.drop(1).joinToString("\n\n") else rawText
+    private suspend fun buildSarvamDraft(
+        topic: String,
+        rawText: String,
+        keyManager: ApiKeyManager
+    ): ArticleDraft {
+        val lines  = rawText.trim().lines().filter { it.isNotBlank() }
+        val title  = lines.firstOrNull() ?: topic
+        val body   = if (lines.size > 1) lines.drop(1).joinToString("\n\n") else rawText
 
-        val sarvamClient = SarvamApiClient(keyManager)
+        // Grammar + humanise
+        val sarvamClient  = SarvamApiClient(keyManager)
         val grammarResult = sarvamClient.checkGrammarAndSpelling(body)
         val grammarChecked = if (grammarResult.success) grammarResult.correctedText else body
 
+        // OpenAI clean + humanise
         val openAiClient = OpenAiApiClient(keyManager)
         val cleanResult  = openAiClient.cleanArticleOutput(title, grammarChecked)
         val finalContent = if (cleanResult.success && cleanResult.cleanedContent.isNotBlank())
@@ -166,9 +189,14 @@ object ArticleGeneratorClient {
     // Gemini API call
     // ─────────────────────────────────────────────────────────────────────────
 
-    private fun tryGemini(topic: String, weatherCtx: String, apiKey: String, model: String): String? {
+    private fun tryGemini(
+        topic: String,
+        weatherCtx: String,
+        apiKey: String,
+        model: String
+    ): String? {
         return try {
-            val weatherLine = if (weatherCtx.isNotBlank()) "\n\nContext: $weatherCtx" else ""
+            val weatherLine = if (weatherCtx.isNotBlank()) "\n\nLocal context: $weatherCtx" else ""
             val bodyJson = JSONObject().apply {
                 put("contents", JSONArray().apply {
                     put(JSONObject().apply {
@@ -179,8 +207,12 @@ object ArticleGeneratorClient {
                     })
                 })
                 put("generationConfig", JSONObject().apply {
-                    put("temperature", 0.8)
-                    put("maxOutputTokens", 2048)
+                    put("temperature",      1.05)
+                    put("topP",             0.97)
+                    put("topK",             50)
+                    put("maxOutputTokens",  2048)
+                    put("frequencyPenalty", 0.4)
+                    put("presencePenalty",  0.3)
                 })
             }
             val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
@@ -191,7 +223,7 @@ object ArticleGeneratorClient {
                     .build()
             ).execute()
             if (!response.isSuccessful) return null
-            val raw = response.body?.string() ?: return null
+            val raw  = response.body?.string() ?: return null
             val text = JSONObject(raw)
                 .getJSONArray("candidates").getJSONObject(0)
                 .getJSONObject("content")
@@ -201,22 +233,32 @@ object ArticleGeneratorClient {
         } catch (e: Exception) { null }
     }
 
-    private fun buildGeminiPrompt(topic: String, weatherLine: String) = """
-        OUTPUT RULES: Output ONLY the JSON object. No intro. No preamble. Begin with {.
+    private fun buildGeminiPrompt(topic: String, weatherLine: String): String {
+        val today = SimpleDateFormat("MMMM d, yyyy", Locale.ENGLISH).format(Date())
+        return """
+You are a seasoned news journalist with 15 years of experience writing for major digital publications. Today is $today.
 
-        You are a professional news journalist. Generate a complete news article draft.
-        TOPIC: $topic$weatherLine
+Write a complete, publish-ready news article about: $topic$weatherLine
 
-        JSON format:
-        {
-          "title": "SEO headline (max 70 chars)",
-          "summary": "2-3 sentence meta description",
-          "content": "Full HTML body: <h2>, <p>, <ul>. 800-1200 words.",
-          "imageQuery": "5-8 word image search query",
-          "category": "Technology/Business/Politics/Sports/Entertainment/Health/Science/Environment/General",
-          "tags": "5-8 comma-separated SEO tags"
-        }
-    """.trimIndent()
+Your writing style:
+- Sharp, direct, human voice. Vary sentence lengths. Some short. Some longer.
+- SEO headline first — specific and punchy, no colons, no "How", no "Why".
+- First sentence drops straight into the story. No "In a significant development" or "As the world watches".
+- Never use: "Furthermore", "Moreover", "In conclusion", "It is worth noting", "Delve into", "This underscores", "Notably", "Landscape", "Pivotal", "Navigate", "In an era of".
+- No section headers. No bullet points. Pure flowing prose.
+- End naturally with a forward-looking observation or real quote.
+
+Return your response as a JSON object ONLY (no text before or after the JSON):
+{
+  "title": "SEO headline (max 70 chars)",
+  "summary": "2-3 sentence meta description",
+  "content": "Full article body as plain text, 800-1000 words, natural paragraphs separated by \\n\\n",
+  "imageQuery": "5-8 word image search query",
+  "category": "Technology/Business/Politics/Sports/Entertainment/Health/Science/Environment/General",
+  "tags": "5-8 comma-separated SEO tags"
+}
+        """.trimIndent()
+    }
 
     private fun parseGeminiJson(raw: String): ArticleDraft? {
         return try {
