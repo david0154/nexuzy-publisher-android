@@ -10,11 +10,14 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
  * Gemini API client.
- * Role 1: Write news articles from RSS item facts.
+ * Role 1: Write news articles from RSS item facts + live web context.
  * Role 2: Generate SEO data (tags, keywords, focus keyphrase, meta description).
  *
  * KEY ROTATION FIX:
@@ -66,6 +69,9 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         rssTitle: String,
         rssDescription: String,
         rssFullContent: String = "",
+        rssPubDate: String = "",
+        rssSourceUrl: String = "",
+        liveWebContext: String = "",
         category: String,
         model: String = DEFAULT_MODEL,
         maxWords: Int = 800
@@ -79,14 +85,17 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             )
         }
 
-        val prompt = buildArticlePrompt(rssTitle, rssDescription, rssFullContent, category, maxWords)
+        val prompt = buildArticlePrompt(
+            rssTitle, rssDescription, rssFullContent,
+            rssPubDate, rssSourceUrl, liveWebContext,
+            category, maxWords
+        )
         val modelsToTry = if (model == DEFAULT_MODEL) MODEL_CHAIN else listOf(model)
 
         var lastError = ""
         var maxRetryAfter = 0
 
         for (keyIndex in keys.indices) {
-            // ── Always re-read keys so rotation applied by rotateGeminiKey() is visible ──
             val currentKeys = keyManager.getGeminiKeys()
             if (keyIndex >= currentKeys.size) break
             val key = currentKeys[keyIndex]
@@ -105,17 +114,15 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                     if (retryAfter > maxRetryAfter) maxRetryAfter = retryAfter
                     Log.w("GeminiClient", "Key ${keyIndex + 1} / $modelName quota exceeded, trying next model")
                     lastError = result.error
-                    continue // try next model with same key
+                    continue
                 }
 
-                // Empty/safety-blocked response → treat as soft fail, try next model
                 if (result.content.isBlank() && result.error.contains("Empty response", ignoreCase = true)) {
                     Log.w("GeminiClient", "Key ${keyIndex + 1} / $modelName returned empty (safety/block), trying next model")
                     lastError = result.error
                     continue
                 }
 
-                // Any other non-quota hard error → rethrow immediately
                 Log.e("GeminiClient", "Non-quota error on key ${keyIndex + 1} / $modelName: ${result.error}")
                 return@withContext result.copy(keyUsed = keyIndex + 1, modelUsed = modelName)
             }
@@ -164,7 +171,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                     continue
                 }
                 if (result.content.isBlank() && result.error.contains("Empty response", ignoreCase = true)) {
-                    continue // safety block — try next model
+                    continue
                 }
                 return@withContext SeoData(false, error = result.error)
             }
@@ -213,9 +220,20 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         title: String,
         desc: String,
         fullContent: String,
+        pubDate: String,
+        sourceUrl: String,
+        liveWebContext: String,
         category: String,
         maxWords: Int
     ): String {
+        val today = SimpleDateFormat("MMMM d, yyyy", Locale.ENGLISH).format(Date())
+
+        val dateSection = buildString {
+            append("Today's date           : $today\n")
+            if (pubDate.isNotBlank()) append("Article published      : $pubDate\n")
+            if (sourceUrl.isNotBlank()) append("Original source URL    : $sourceUrl\n")
+        }
+
         val sourceSection = if (fullContent.isNotBlank()) {
             """
             |─── ORIGINAL ARTICLE (scraped from source) ───────────────────────
@@ -227,34 +245,48 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         } else {
             """
             |RSS Summary/Description: $desc
-            |(Note: Full article not available. Write based on title and summary only.)
+            |(Note: Full article not available. Write based on title, summary, and web context only.)
             """.trimMargin()
         }
 
+        val webSection = if (liveWebContext.isNotBlank()) {
+            """
+            |
+            |─── LIVE WEB CONTEXT (fetched today from DuckDuckGo) ─────────────
+            |$liveWebContext
+            |──────────────────────────────────────────────────────────────────
+            |(Use the above for current context. Prioritise the original article facts over web context.)
+            """.trimMargin()
+        } else ""
+
         return """
-            You are a professional news journalist. Write a complete, factual, engaging news article.
+            You are a professional news journalist writing for today, $today.
+            IMPORTANT: This is a CURRENT news article. Do NOT use outdated 2024 data.
+            Write as if you are reporting fresh, breaking, or recently published news.
 
             Original Headline : $title
             Category          : $category
             Target length     : approximately $maxWords words
-
+            $dateSection
             $sourceSection
+            $webSection
 
             Writing requirements:
             - Create a strong lead paragraph (who, what, when, where, why)
             - Objective, professional journalistic tone
-            - Add relevant context and background using the source material above
+            - Add relevant context and background using the source material and live web context above
             - End with implications, reactions, or outlook
             - Rewrite completely in your own words — do NOT copy the original verbatim
             - Do NOT add quotes that are not present in the source
-            - Do NOT invent statistics or facts not in the source
+            - Do NOT invent statistics or facts not in the source or web context
             - Write a NEW SEO-friendly headline
-            - Use only the facts provided in the source above
+            - Use only the facts provided in the source and web context above
             - Do NOT mention, credit, or reference the original author, journalist, reporter, or writer by name anywhere in the article
             - Do NOT include any byline, "By [Name]", "Written by", "Reported by", or "According to [journalist name]" lines
             - Do NOT mention the original publication's staff, contributors, or editors by name
             - Do NOT include image captions, photo credits, or image HTML tags — output plain text article body only
             - Do NOT repeat or duplicate the headline or any paragraph within the article body
+            - Do NOT reference "as of 2024" or any past year — this article is current as of $today
 
             Write the complete rewritten article now (headline first, then body paragraphs only):
         """.trimIndent()
@@ -296,10 +328,10 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             val tagsArr = json.getAsJsonArray("tags")
             val tags = (0 until tagsArr.size()).map { tagsArr[it].asString }
             SeoData(
-                success        = true,
-                tags           = tags,
-                metaKeywords   = json.get("meta_keywords")?.asString ?: tags.joinToString(", "),
-                focusKeyphrase = json.get("focus_keyphrase")?.asString ?: "",
+                success         = true,
+                tags            = tags,
+                metaKeywords    = json.get("meta_keywords")?.asString ?: tags.joinToString(", "),
+                focusKeyphrase  = json.get("focus_keyphrase")?.asString ?: "",
                 metaDescription = json.get("meta_description")?.asString ?: ""
             )
         } catch (e: Exception) {

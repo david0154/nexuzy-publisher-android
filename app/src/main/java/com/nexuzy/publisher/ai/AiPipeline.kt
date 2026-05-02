@@ -5,6 +5,7 @@ import android.util.Log
 import com.nexuzy.publisher.data.model.Article
 import com.nexuzy.publisher.data.model.RssItem
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
+import com.nexuzy.publisher.network.DuckDuckGoSearchClient
 import com.nexuzy.publisher.network.GeminiApiClient
 import com.nexuzy.publisher.network.ImageDownloader
 import com.nexuzy.publisher.network.OpenAiApiClient
@@ -15,11 +16,12 @@ import kotlinx.coroutines.withContext
 /**
  * AI Pipeline Orchestrator.
  *
- * STEP 1 — WRITE:    Gemini (all keys ×4 models) → Sarvam backup writer
- * STEP 2 — VERIFY:   OpenAI fact-check (confidence score fixed: min 0.3)
- * STEP 3 — GRAMMAR:  Sarvam grammar & spelling
- * STEP 4 — SEO:      Gemini generateSeoData → Sarvam generateSeoData backup
- * STEP 5 — IMAGE:    Watermark check → Google image search fallback → local file
+ * STEP 0 — WEB CONTEXT: DuckDuckGo live search for current topic context
+ * STEP 1 — WRITE:       Gemini (all keys ×4 models) → Sarvam backup writer
+ * STEP 2 — VERIFY:      OpenAI fact-check (confidence score fixed: min 0.3)
+ * STEP 3 — GRAMMAR:     Sarvam grammar & spelling
+ * STEP 4 — SEO:         Gemini generateSeoData → Sarvam generateSeoData backup
+ * STEP 5 — IMAGE:       Watermark check → Google image search fallback → local file
  */
 class AiPipeline(private val context: Context) {
 
@@ -28,6 +30,7 @@ class AiPipeline(private val context: Context) {
     private val openAi          = OpenAiApiClient(keyManager)
     private val sarvam          = SarvamApiClient(keyManager)
     private val imageDownloader = ImageDownloader(context)
+    private val ddgSearch       = DuckDuckGoSearchClient()
 
     // ─── Data classes ──────────────────────────────────────────────────────────
 
@@ -62,6 +65,7 @@ class AiPipeline(private val context: Context) {
     data class PipelineProgress(val step: Step, val message: String)
 
     enum class Step {
+        WEB_SEARCHING,
         GEMINI_WRITING, SARVAM_WRITING,
         OPENAI_CHECKING,
         SARVAM_CHECKING,
@@ -106,7 +110,7 @@ class AiPipeline(private val context: Context) {
             )
         }
 
-    // ─── MODE B: Full pipeline (Write → Verify → Grammar → SEO → Image) ────────
+    // ─── MODE B: Full pipeline (WebSearch → Write → Verify → Grammar → SEO → Image) ──
 
     suspend fun processRssItem(
         rssItem: RssItem,
@@ -121,12 +125,33 @@ class AiPipeline(private val context: Context) {
         var sarvamWriter     = false
         var sarvamSeo        = false
 
-        // ── STEP 1A: Gemini writes ─────────────────────────────────────────────
+        // ── STEP 0: DuckDuckGo live web context ───────────────────────────────
+        onProgress?.invoke(PipelineProgress(Step.WEB_SEARCHING, "🌐 Fetching live web context…"))
+        var liveWebContext = ""
+        try {
+            val searchQuery = "${rssItem.title} ${rssItem.feedCategory} latest news"
+            val ddgResult = ddgSearch.search(searchQuery, maxChars = 1200)
+            if (ddgResult.success && ddgResult.summary.isNotBlank()) {
+                liveWebContext = ddgResult.summary
+                Log.i("AiPipeline", "DDG context fetched: ${liveWebContext.length} chars")
+            } else {
+                Log.w("AiPipeline", "DDG search returned nothing: ${ddgResult.error}")
+                stepErrors.add("DDG search: ${ddgResult.error}")
+            }
+        } catch (e: Exception) {
+            Log.w("AiPipeline", "DDG search exception: ${e.message}")
+            stepErrors.add("DDG search exception: ${e.message}")
+        }
+
+        // ── STEP 1A: Gemini writes (with live web context) ────────────────────
         onProgress?.invoke(PipelineProgress(Step.GEMINI_WRITING, "✍️ Gemini rewriting article…"))
         val geminiResult = gemini.writeNewsArticle(
             rssTitle       = rssItem.title,
             rssDescription = rssItem.description,
             rssFullContent = rssItem.fullContent,
+            rssPubDate     = rssItem.pubDate,
+            rssSourceUrl   = rssItem.link,
+            liveWebContext = liveWebContext,
             category       = rssItem.feedCategory,
             model          = model,
             maxWords       = maxWords
@@ -228,22 +253,19 @@ class AiPipeline(private val context: Context) {
         var localImagePath = rssItem.localImagePath
 
         if (localImagePath.isBlank() && rssItem.imageUrl.isNotBlank()) {
-            // downloadImage now handles: download → watermark check → Google fallback
             val hasSearchKeys = keyManager.getGoogleSearchApiKey().isNotBlank() &&
                                 keyManager.getGoogleSearchCseId().isNotBlank()
 
             if (hasSearchKeys) {
-                // Pass the article title as search query for the watermark fallback
                 onProgress?.invoke(
-                    PipelineProgress(Step.IMAGE_WATERMARK_SEARCH,
-                    "🔍 Checking image for watermarks…")
+                    PipelineProgress(Step.IMAGE_WATERMARK_SEARCH, "🔍 Checking image for watermarks…")
                 )
             }
 
             localImagePath = imageDownloader.downloadImage(
-                url          = rssItem.imageUrl,
-                titleHint    = rssItem.title,
-                searchQuery  = rssItem.title,
+                url           = rssItem.imageUrl,
+                titleHint     = rssItem.title,
+                searchQuery   = rssItem.title,
                 apiKeyManager = keyManager
             )
 
