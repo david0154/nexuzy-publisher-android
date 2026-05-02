@@ -4,11 +4,12 @@
   <img src="https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white" />
   <img src="https://img.shields.io/badge/Language-Kotlin-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white" />
   <img src="https://img.shields.io/badge/AI-Gemini%20%7C%20OpenAI%20%7C%20Sarvam-FF6B35?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/On--Device-Gemma%202B-34A853?style=for-the-badge&logo=google&logoColor=white" />
   <img src="https://img.shields.io/badge/CMS-WordPress-21759B?style=for-the-badge&logo=wordpress&logoColor=white" />
   <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" />
 </p>
 
-> **Nexuzy Publisher** is an AI-powered Android news publishing app that transforms RSS feeds into fully verified, SEO-optimised WordPress draft articles — automatically. It combines **Gemini AI** for writing, **OpenAI** for fact verification, **Sarvam AI** for grammar correction, and a **WordPress REST API** push pipeline into one seamless editorial workflow.
+> **Nexuzy Publisher** is an AI-powered Android news publishing app that transforms RSS feeds into fully verified, SEO-optimised WordPress draft articles — automatically. It combines **Gemini AI** for writing, **OpenAI** for fact verification, **Sarvam AI** for grammar correction, an **on-device Gemma 2B writer** for offline AI authoring, and a **WordPress REST API** push pipeline into one seamless editorial workflow.
 
 ---
 
@@ -64,8 +65,9 @@ Step 1  ─  OpenAI Fact Verification
            └─ Checks article authenticity, returns confidence score (0–100)
            └─ Suspicious articles are flagged with reason text
 
-Step 2  ─  Gemini Article Rewrite
-           └─ Rewrites full article body in professional news style
+Step 2  ─  Gemini Article Rewrite  (cloud)  OR  Gemma 2B On-Device  (offline)
+           └─ Cloud: Rewrites full article body in professional news style
+           └─ On-Device: Gemma 2B runs locally — no API key, no internet needed
            └─ Expands thin RSS description into 400–800 word article
            └─ Returns rewritten title + body
 
@@ -83,10 +85,119 @@ Step 5  ─  Article Image Download
            └─ Falls back to remote RSS imageUrl if download fails
 ```
 
+---
+
+## 🧠 On-Device AI Writer — Gemma 2B
+
+Nexuzy Publisher includes a fully **offline, on-device AI article writer** powered by **Google's Gemma 2B** model running locally on the Android device via **MediaPipe LLM Inference** — no internet connection, no API key, and zero cloud cost required.
+
+### How It Works
+
+The on-device writer is a **drop-in alternative** to the cloud Gemini step in the AI pipeline. When enabled, the device itself generates the article using the Gemma 2B INT4-quantised model stored on local storage.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  ON-DEVICE AI WRITER — Gemma 2B                                      │
+├──────────────────────────────────────────────────────────────────────┤
+│  Model      : Gemma 2B (INT4 quantised, ~1.4 GB)                     │
+│  Framework  : MediaPipe LLM Inference Task (tasks-genai)             │
+│  Runtime    : CPU / GPU delegate (auto-selected)                     │
+│  Storage    : /sdcard/Download/gemma-2b-it-q4_k_m.gguf               │
+│               OR /data/local/tmp/llm/ (push via adb)                 │
+│  Internet   : ❌ Not required                                         │
+│  API Key    : ❌ Not required                                         │
+│  Cost       : ✅ Zero — fully local inference                        │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Requirements
+
+| Requirement | Minimum | Recommended |
+|-------------|---------|-------------|
+| Android version | Android 9.0 (API 28) | Android 12+ |
+| RAM | 4 GB | 6 GB+ |
+| Free storage | 1.6 GB | 2 GB+ |
+| Processor | ARM64 (any modern SoC) | Snapdragon 8 Gen 1 / Dimensity 9000+ |
+| GPU delegate | Optional | Adreno 650+ / Mali-G710+ for faster inference |
+
+### Model Setup
+
+**Step 1 — Download the Gemma 2B model file**
+
+Download the INT4-quantised GGUF from Hugging Face:
+```
+https://huggingface.co/google/gemma-2b-it-GGUF
+File: gemma-2b-it-q4_k_m.gguf  (~1.4 GB)
+```
+
+**Step 2 — Place the model file on your device**
+
+Option A — Copy via file manager:
+```
+Place at: /sdcard/Download/gemma-2b-it-q4_k_m.gguf
+```
+
+Option B — Push via ADB:
+```bash
+adb push gemma-2b-it-q4_k_m.gguf /data/local/tmp/llm/gemma-2b-it-q4_k_m.gguf
+```
+
+**Step 3 — Enable in Settings**
+
+Go to **Settings → AI Writer Mode** and select **On-Device (Gemma 2B)**.
+The app will scan for the model file on launch and activate the local inference engine.
+
+### Features
+
+- **Fully offline** — works with no Wi-Fi or mobile data
+- **Zero API cost** — no Gemini quota consumed for the write step
+- **Private** — article content never leaves the device during generation
+- **Streaming output** — article text appears word-by-word in real time as the model generates
+- **Same pipeline compatibility** — output feeds directly into Steps 3–5 (Sarvam grammar, SEO, image download) exactly like the cloud writer
+- **Auto-fallback** — if the model file is missing or inference fails, the pipeline automatically falls back to cloud Gemini with a toast notification
+- **Progress indicator** — token generation speed (tokens/sec) shown in the editor status bar during inference
+
+### Writing Quality
+
+Gemma 2B on-device produces shorter articles (~300–500 words) compared to cloud Gemini (~600–900 words). For best results:
+
+- Provide a **rich RSS description** (longer context = better article)
+- The **Sarvam grammar pass** (Step 3) cleans any repetitive phrasing from the smaller model
+- Use **cloud Gemini** for flagship articles; **on-device** for high-volume or offline publishing
+
+### Architecture
+
+```
+OnDeviceAiWriter.kt
+  └─ MediaPipe LlmInference  (tasks-genai dependency)
+      └─ Model: gemma-2b-it-q4_k_m.gguf
+      └─ inferenceCallback → streams tokens to UI
+      └─ generateAsync() → returns full article string
+
+AiPipeline.kt
+  └─ if (useOnDeviceWriter) OnDeviceAiWriter.write(rssItem)
+     else                   GeminiApiClient.writeNewsArticle(...)
+```
+
+### Gradle Dependency
+
+```groovy
+// app/build.gradle
+dependencies {
+    // On-device LLM inference (Gemma 2B)
+    implementation("com.google.mediapipe:tasks-genai:0.10.22")
+}
+```
+
+> **Note:** The `tasks-genai` dependency replaces the earlier `litert-lm:1.0.0-beta1` dependency which had restricted Maven access. MediaPipe Tasks GenAI is the stable, publicly available alternative.
+
+---
+
 ### ✏️ Article Editor (`ArticleEditorActivity`)
 - Pre-filled with RSS title + description on open
 - **Run AI Pipeline** button — runs all 5 steps with live progress status
-- Gemini **rewritten title** auto-applied to title field after pipeline
+- **AI Mode chip** shows active writer: `☁️ Cloud (Gemini)` or `📱 On-Device (Gemma 2B)`
+- Gemini / Gemma **rewritten title** auto-applied to title field after pipeline
 - Full article body editable after generation
 - **AI Chips** show pipeline completion: `Gemini ✅ | OpenAI ✅ | Sarvam ✅ | SEO ✅`
 - **Fact feedback** panel shows OpenAI confidence score and reasoning
@@ -148,11 +259,12 @@ Step 5  ─  Article Image Download
 │     └─ Auto-login check → Google Sign-In OR Skip                   │
 ├─────────────────────────────────────────────────────────────────────┤
 │  2. SETTINGS (first-time setup)                                     │
-│     └─ Enter: Gemini API Key                                        │
+│     └─ Enter: Gemini API Key  (or choose On-Device mode)            │
 │     └─ Enter: OpenAI API Key                                        │
 │     └─ Enter: Sarvam AI API Key                                     │
 │     └─ Enter: WordPress URL + Username + App Password               │
 │     └─ Enter: Ads Code (optional)                                   │
+│     └─ Select AI Writer Mode: ☁️ Cloud (Gemini) | 📱 On-Device (Gemma 2B) │
 │     └─ Save → all encrypted in EncryptedSharedPreferences           │
 ├─────────────────────────────────────────────────────────────────────┤
 │  3. RSS TAB                                                         │
@@ -170,9 +282,10 @@ Step 5  ─  Article Image Download
 ├─────────────────────────────────────────────────────────────────────┤
 │  5. AI ARTICLE EDITOR                                               │
 │     └─ Pre-filled title + description from RSS                      │
+│     └─ AI Mode: ☁️ Cloud (Gemini) OR 📱 On-Device (Gemma 2B)       │
 │     └─ Tap "Run AI Pipeline":                                       │
 │         ├─ Step 1: OpenAI → fact verify + confidence score          │
-│         ├─ Step 2: Gemini → full article rewrite + SEO title        │
+│         ├─ Step 2: Gemini (cloud) OR Gemma 2B (on-device) → write   │
 │         ├─ Step 3: Sarvam → grammar + spelling correction           │
 │         ├─ Step 4: Gemini → SEO meta (tags, keyphrase, description) │
 │         └─ Step 5: Download RSS image to local storage              │
@@ -199,7 +312,8 @@ Step 5  ─  Article Image Download
 | Architecture | MVVM — ViewModel + LiveData + Repository |
 | Local DB | Room (SQLite) with 4 entities |
 | Networking | OkHttp 4 + Gson |
-| AI — Writing | Google Gemini API (`generativelanguage.googleapis.com`) |
+| AI — Writing (Cloud) | Google Gemini API (`generativelanguage.googleapis.com`) |
+| AI — Writing (On-Device) | **Gemma 2B INT4** via MediaPipe LLM Inference (`tasks-genai`) |
 | AI — Fact Check | OpenAI Chat Completions API (`gpt-4o-mini`) |
 | AI — Grammar | Sarvam AI API |
 | Auth | Firebase Authentication (Google Sign-In) |
@@ -235,12 +349,15 @@ app/src/main/java/com/nexuzy/publisher/
 │       └── SettingsActivity.kt       # API keys + WP credentials
 │
 ├── ai/
-│   └── AiPipeline.kt                 # 5-step AI orchestrator
+│   ├── AiPipeline.kt                 # 5-step AI orchestrator
+│   └── OnDeviceAiWriter.kt           # Gemma 2B on-device inference (MediaPipe)
 │
 ├── workflow/
 │   └── NewsWorkflowManager.kt        # Batch + single-item workflow logic
 │
 ├── network/
+│   ├── GeminiApiClient.kt            # Cloud Gemini REST client
+│   ├── SarvamApiClient.kt            # Sarvam AI grammar + SEO client
 │   ├── RssFeedParser.kt              # RSS 2.0 / Atom feed scraper
 │   └── WordPressApiClient.kt         # WP REST API v2 client
 │
@@ -261,7 +378,7 @@ app/src/main/java/com/nexuzy/publisher/
 │       └── ApiKeyManager.kt          # EncryptedSharedPreferences wrapper
 │
 └── worker/
-    └── NewsPublisherWorker.kt        # WorkManager background batch job
+    └── NewsPublisherWorker.kt        # WorkManager background background batch job
 ```
 
 ---
@@ -274,6 +391,7 @@ app/src/main/java/com/nexuzy/publisher/
 - A Google Firebase project
 - API keys for Gemini, OpenAI, Sarvam AI
 - A WordPress site with Application Passwords enabled
+- *(Optional)* Gemma 2B GGUF model file for on-device writing
 
 ### 1. Clone the repo
 ```bash
@@ -306,7 +424,8 @@ Or open in Android Studio and click **Run ▶**
    - Site URL: `https://yoursite.com`
    - Username: your WP username
    - App Password: WP Admin → Users → Application Passwords → Create new
-5. Tap **Save**
+5. *(Optional)* Select **On-Device (Gemma 2B)** as AI Writer Mode — see [On-Device AI Writer](#-on-device-ai-writer--gemma-2b) section above for model setup
+6. Tap **Save**
 
 ### 5. Add RSS Feeds & Publish
 1. Go to **RSS** tab → Add feed URLs
@@ -323,6 +442,7 @@ Or open in Android Studio and click **Run ▶**
 - Keys are **never hardcoded** in source code or `BuildConfig`
 - WordPress password uses **Application Passwords** — never your main account password
 - Firebase rules should restrict Firestore read/write to authenticated users only
+- On-device Gemma 2B mode requires **no API keys at all** for the write step
 
 ```json
 // Recommended Firestore rules
@@ -391,5 +511,5 @@ SOFTWARE.
 ---
 
 <p align="center">
-  Made with ❤️ by <strong>Nexuzy Lab</strong> · Powered by Gemini AI, OpenAI & Sarvam AI
+  Made with ❤️ by <strong>Nexuzy Lab</strong> · Powered by Gemini AI, OpenAI, Sarvam AI & Gemma 2B On-Device
 </p>
