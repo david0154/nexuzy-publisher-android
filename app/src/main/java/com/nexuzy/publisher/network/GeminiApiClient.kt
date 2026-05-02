@@ -25,6 +25,12 @@ import java.util.concurrent.TimeUnit
  *   so rotateGeminiKey() actually takes effect within the same call.
  * - Empty / safety-blocked responses are treated as a soft retryable failure so
  *   we try the next model before giving up — they are NOT hard errors.
+ *
+ * HUMAN WRITING FIX (v3):
+ * - temperature raised to 1.05 for natural, varied sentence rhythm
+ * - topP 0.97 for broader vocabulary selection
+ * - Prompt rewritten as a seasoned journalist persona — no bullet rules, no AI instructions
+ * - Explicitly forbids AI-style openers, structured headers, and robotic transitions
  */
 class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -228,77 +234,53 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
     ): String {
         val today = SimpleDateFormat("MMMM d, yyyy", Locale.ENGLISH).format(Date())
 
-        val dateSection = buildString {
-            append("Today's date           : $today\n")
-            if (pubDate.isNotBlank()) append("Article published      : $pubDate\n")
-            if (sourceUrl.isNotBlank()) append("Original source URL    : $sourceUrl\n")
+        val sourceMaterial = buildString {
+            if (pubDate.isNotBlank())     appendLine("Published: $pubDate")
+            if (sourceUrl.isNotBlank())   appendLine("Source: $sourceUrl")
+            appendLine()
+            if (fullContent.isNotBlank()) {
+                appendLine("--- SOURCE ARTICLE ---")
+                appendLine(fullContent.take(3500))
+                appendLine("--- END SOURCE ---")
+                appendLine()
+                appendLine("RSS summary: $desc")
+            } else {
+                appendLine("RSS summary: $desc")
+                appendLine("(Full article unavailable — write from title, summary and web context.)")
+            }
+            if (liveWebContext.isNotBlank()) {
+                appendLine()
+                appendLine("--- ADDITIONAL WEB CONTEXT (fetched today) ---")
+                appendLine(liveWebContext)
+                appendLine("--- END WEB CONTEXT ---")
+            }
         }
 
-        val sourceSection = if (fullContent.isNotBlank()) {
-            """
-            |─── ORIGINAL ARTICLE (scraped from source) ────────────────────────────
-            |${fullContent.take(3500)}
-            |──────────────────────────────────────────────────────────────
-            |
-            |Short RSS Summary (for context): $desc
-            """.trimMargin()
-        } else {
-            """
-            |RSS Summary/Description: $desc
-            |(Note: Full article not available. Write based on title, summary, and web context only.)
-            """.trimMargin()
-        }
-
-        val webSection = if (liveWebContext.isNotBlank()) {
-            """
-            |
-            |─── LIVE WEB CONTEXT (fetched today from DuckDuckGo) ─────────────────
-            |$liveWebContext
-            |──────────────────────────────────────────────────────────────
-            |(Use the above for current context. Prioritise the original article facts over web context.)
-            """.trimMargin()
-        } else ""
-
+        // ── THE CORE PROMPT — persona-driven, no bullet-point rules ──
         return """
-            ███ CRITICAL OUTPUT RULES — READ FIRST ███
-            - Output the final news article ONLY.
-            - Do NOT include any thinking, reasoning, planning, notes, or internal commentary.
-            - Do NOT start with "Okay", "Let me", "First", "I need to", "I'll", "Sure", or any preamble.
-            - Do NOT explain what you are going to write or how you will approach the task.
-            - Do NOT include meta-commentary about the article before, during, or after the article.
-            - Begin your response IMMEDIATELY with the SEO headline of the article.
-            - End your response with the final paragraph of the article body. Nothing after.
-            █████████████████████████████████
+You are a seasoned news journalist with 15 years of experience writing for major digital publications. You have a sharp, direct voice — you get to the point fast, you never pad sentences, and your writing never sounds like it came from a machine.
 
-            You are a professional news journalist writing for today, $today.
-            IMPORTANT: This is a CURRENT news article. Do NOT use outdated 2024 data.
-            Write as if you are reporting fresh, breaking, or recently published news.
+Today is $today. You are writing a fresh news article for the "$category" section.
 
-            Original Headline : $title
-            Category          : $category
-            Target length     : approximately $maxWords words
-            $dateSection
-            $sourceSection
-            $webSection
+SOURCE MATERIAL:
+$sourceMaterial
 
-            Writing requirements:
-            - Create a strong lead paragraph (who, what, when, where, why)
-            - Objective, professional journalistic tone
-            - Add relevant context and background using the source material and live web context above
-            - End with implications, reactions, or outlook
-            - Rewrite completely in your own words — do NOT copy the original verbatim
-            - Do NOT add quotes that are not present in the source
-            - Do NOT invent statistics or facts not in the source or web context
-            - Write a NEW SEO-friendly headline
-            - Use only the facts provided in the source and web context above
-            - Do NOT mention, credit, or reference the original author, journalist, reporter, or writer by name anywhere in the article
-            - Do NOT include any byline, "By [Name]", "Written by", "Reported by", or "According to [journalist name]" lines
-            - Do NOT mention the original publication's staff, contributors, or editors by name
-            - Do NOT include image captions, photo credits, or image HTML tags — output plain text article body only
-            - Do NOT repeat or duplicate the headline or any paragraph within the article body
-            - Do NOT reference "as of 2024" or any past year — this article is current as of $today
+YOUR TASK:
+Write a compelling, publish-ready news article of approximately $maxWords words based only on the facts in the source material above. Do not invent quotes, statistics, or events not present in the source.
 
-            Write the complete rewritten article now (SEO headline first, then body paragraphs only):
+WRITING STYLE — this is the most important part:
+- Sound like a human journalist, not an AI. Vary your sentence length. Some sentences are short. Others build context and add weight before landing the point.
+- Write a punchy SEO headline first. No colons, no "How", no "Why", no "Everything You Need to Know". Just a direct, specific headline.
+- Your first sentence should drop the reader straight into the story — no "In a significant development", no "As the world watches", no "In today's rapidly evolving landscape". Just the news.
+- Never use these AI-filler phrases: "It is worth noting", "Furthermore", "Moreover", "In conclusion", "It is important to highlight", "Delve into", "In summary", "Shed light on", "Underscore", "Notably", "This underscores", "Landscape", "In an era of", "Navigate", "Pivotal".
+- No section headers. No bullet points. No numbered lists. Pure flowing article prose only.
+- Write like you are telling a story to a smart reader who has 2 minutes. Be direct, be human, be clear.
+- Vary paragraph length. Not every paragraph is 3 sentences. Some are 1. Some are 4.
+- End the article naturally — a forward-looking sentence, a quote if one exists in the source, or a crisp final observation. Never end with "Only time will tell" or "remains to be seen".
+- Do not add any byline, photo captions, or "Tags:" at the end.
+- Do not explain what you are about to write. Begin immediately with the headline.
+
+Write the article now:
         """.trimIndent()
     }
 
@@ -356,10 +338,12 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             {
               "contents": [{"parts": [{"text": $escaped}]}],
               "generationConfig": {
-                "temperature": 0.7,
-                "topK": 40,
-                "topP": 0.95,
-                "maxOutputTokens": 2048
+                "temperature": 1.05,
+                "topK": 50,
+                "topP": 0.97,
+                "maxOutputTokens": 2048,
+                "frequencyPenalty": 0.4,
+                "presencePenalty": 0.3
               },
               "safetySettings": [
                 {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
