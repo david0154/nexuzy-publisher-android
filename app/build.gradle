@@ -100,10 +100,9 @@ dependencies {
 
     // ----------------------------------------------------------------
     // Devil AI 2B - LiteRT-LM (Gemma 3n E2B on-device inference)
-    // Source: github.com/google-ai-edge/LiteRT-LM
-    // Requires JitPack repo (added in settings.gradle)
+    // Correct Google Maven artifact (NOT JitPack)
     // ----------------------------------------------------------------
-    implementation 'com.github.google-ai-edge:LiteRT-LM:1.0.1'
+    implementation 'com.google.ai.edge.litert:litert-lm:1.0.1'
 
     // ----------------------------------------------------------------
     // Testing
