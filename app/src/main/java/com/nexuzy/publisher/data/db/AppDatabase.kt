@@ -15,7 +15,7 @@ import com.nexuzy.publisher.data.model.WordPressSite
 
 @Database(
     entities = [Article::class, RssFeed::class, WordPressSite::class, UserProfile::class],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
