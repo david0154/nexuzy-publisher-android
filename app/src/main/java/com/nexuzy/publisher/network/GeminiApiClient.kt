@@ -45,6 +45,11 @@ import java.util.concurrent.TimeUnit
  * - cleanArticleOutput() strips any AI thinking-text lines that leak before the article
  * - Removes banned filler phrases injected mid-article by the model
  * - Applied to every article result before it leaves this class
+ *
+ * SARVAM FALLBACK FIX (v6):
+ * - writeNewsArticle() now falls back to SarvamApiClient.writeArticle() when ALL Gemini keys fail
+ * - generateSeoData() now falls back to SarvamApiClient.generateSeoData() when ALL Gemini keys fail
+ * - Both fallback paths apply cleanArticleOutput() / parseSeoResponse() so output quality is consistent
  */
 class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
@@ -95,12 +100,11 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         var clean = text.trim()
 
         // --- 1. Strip AI thinking-text lines at the very start ---
-        // Models sometimes begin their response with internal reasoning before the article.
         val thinkingPrefixes = listOf(
-            Regex("""^(Okay|Alright|Sure|Got it|Of course|Certainly)[,!]?\s.*?[\.\n]""", RegexOption.IGNORE_CASE),
-            Regex("""^(Let me|I'll|I will|I need to|I'm going to)\s.*?[\.\n]""", RegexOption.IGNORE_CASE),
-            Regex("""^(Here is|Here's|The following is|Below is)\s.*?[\.\n]""", RegexOption.IGNORE_CASE),
-            Regex("""^(The user|My task|As requested|As instructed)\s.*?[\.\n]""", RegexOption.IGNORE_CASE)
+            Regex("""^(Okay|Alright|Sure|Got it|Of course|Certainly)[,!]?\s.*?[.\n]""", RegexOption.IGNORE_CASE),
+            Regex("""^(Let me|I'll|I will|I need to|I'm going to)\s.*?[.\n]""", RegexOption.IGNORE_CASE),
+            Regex("""^(Here is|Here's|The following is|Below is)\s.*?[.\n]""", RegexOption.IGNORE_CASE),
+            Regex("""^(The user|My task|As requested|As instructed)\s.*?[.\n]""", RegexOption.IGNORE_CASE)
         )
         for (pattern in thinkingPrefixes) {
             clean = pattern.replace(clean, "").trim()
@@ -109,10 +113,8 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         // --- 2. Strip <think>...</think> reasoning blocks (Sarvam / DeepSeek style) ---
         clean = clean.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "").trim()
 
-        // --- 3. Remove banned filler phrases that make articles sound AI-generated ---
-        // These are injected mid-sentence by the model despite the prompt forbidding them.
+        // --- 3. Remove banned filler phrases ---
         val bannedPhrases = mapOf(
-            // Openers that corrupt sentence beginnings
             Regex("""^To be honest,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
             Regex("""^Arguably,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
             Regex("""^If you think about it,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
@@ -124,8 +126,6 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             Regex("""^As the world watches,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
             Regex("""^Notably,?\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "",
             Regex("""^This underscores\s""", setOf(RegexOption.MULTILINE, RegexOption.IGNORE_CASE)) to "This shows ",
-
-            // Mid-sentence filler replacements
             Regex("""\bdelve into\b""", RegexOption.IGNORE_CASE) to "explore",
             Regex("""\bshed light on\b""", RegexOption.IGNORE_CASE) to "explain",
             Regex("""\bunderscore(s)?\b""", RegexOption.IGNORE_CASE) to "highlight$1",
@@ -143,7 +143,7 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             clean = pattern.replace(clean, replacement)
         }
 
-        // --- 4. Clean up any double spaces or blank lines left by removals ---
+        // --- 4. Clean up double spaces / blank lines ---
         clean = clean.replace(Regex("""\n{3,}"""), "\n\n")
         clean = clean.replace(Regex("""[ \t]{2,}"""), " ")
 
@@ -168,9 +168,10 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
         val keys = keyManager.getGeminiKeys()
         if (keys.isEmpty()) {
-            return@withContext GeminiResult(
-                false, "",
-                "No Gemini API keys configured. Please add at least one Gemini API key in Settings."
+            // No Gemini keys at all — go straight to Sarvam
+            Log.w("GeminiClient", "No Gemini keys configured — trying Sarvam AI directly")
+            return@withContext sarvamArticleFallback(
+                rssTitle, rssDescription, rssFullContent, category, maxWords
             )
         }
 
@@ -195,7 +196,6 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
 
                 if (result.success) {
                     Log.i("GeminiClient", "Success ✔ key=${keyIndex + 1}, model=$modelName")
-                    // ✅ Sanitize output before returning
                     val cleaned = cleanArticleOutput(result.content)
                     return@withContext result.copy(
                         content   = cleaned,
@@ -212,7 +212,6 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
                     continue
                 }
 
-                // Treat 404 (model not found) as a skip — try next model instead of hard-failing
                 if (isModelNotFound(result.error)) {
                     Log.w("GeminiClient", "Key ${keyIndex + 1} / $modelName not found (404), skipping model")
                     lastError = result.error
@@ -232,16 +231,52 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             keyManager.rotateGeminiKey()
         }
 
-        val retryMsg = if (maxRetryAfter > 0)
-            " Gemini resets in about ${maxRetryAfter}s — please wait and try again."
-        else
-            " Try again in 60 seconds, or add more API keys in Settings."
-
-        return@withContext GeminiResult(
-            false, "",
-            "All ${keys.size} Gemini key(s) × ${modelsToTry.size} models have exceeded quota.$retryMsg",
-            retryAfterSeconds = maxRetryAfter
+        // ── ALL GEMINI KEYS EXHAUSTED → SARVAM FALLBACK ──
+        Log.w("GeminiClient", "All ${keys.size} Gemini key(s) exhausted — falling back to Sarvam AI")
+        return@withContext sarvamArticleFallback(
+            rssTitle, rssDescription, rssFullContent, category, maxWords
         )
+    }
+
+    /**
+     * Sarvam AI fallback for article writing.
+     * Called when every Gemini key + model combination has failed.
+     */
+    private suspend fun sarvamArticleFallback(
+        rssTitle: String,
+        rssDescription: String,
+        rssFullContent: String,
+        category: String,
+        maxWords: Int
+    ): GeminiResult {
+        return try {
+            val sarvam = SarvamApiClient(keyManager)
+            val result = sarvam.writeArticle(
+                rssTitle       = rssTitle,
+                rssDescription = rssDescription,
+                rssFullContent = rssFullContent,
+                category       = category,
+                maxWords       = maxWords
+            )
+            if (result.success && result.content.isNotBlank()) {
+                Log.i("GeminiClient", "Sarvam fallback succeeded for article")
+                GeminiResult(
+                    success    = true,
+                    content    = cleanArticleOutput(result.content),
+                    modelUsed  = "sarvam-m"
+                )
+            } else {
+                Log.e("GeminiClient", "Sarvam fallback also failed: ${result.error}")
+                GeminiResult(
+                    false, "",
+                    "All Gemini keys exhausted and Sarvam AI also failed: ${result.error}\n" +
+                    "Please check your API keys in Settings."
+                )
+            }
+        } catch (e: Exception) {
+            Log.e("GeminiClient", "Sarvam fallback exception: ${e.message}")
+            GeminiResult(false, "", "All Gemini keys exhausted. Sarvam fallback error: ${e.message}")
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -255,7 +290,10 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
         model: String = DEFAULT_MODEL
     ): SeoData = withContext(Dispatchers.IO) {
         val keys = keyManager.getGeminiKeys()
-        if (keys.isEmpty()) return@withContext SeoData(false, error = "No Gemini keys configured.")
+        if (keys.isEmpty()) {
+            Log.w("GeminiClient", "No Gemini keys — trying Sarvam AI for SEO directly")
+            return@withContext sarvamSeoFallback(title, articleContent, category)
+        }
 
         val prompt = buildSeoPrompt(title, articleContent, category)
         val modelsToTry = if (model == DEFAULT_MODEL) MODEL_CHAIN else listOf(model)
@@ -283,7 +321,39 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             }
             keyManager.rotateGeminiKey()
         }
-        return@withContext SeoData(false, error = "All Gemini keys exhausted for SEO generation.")
+
+        // ── ALL GEMINI KEYS EXHAUSTED → SARVAM FALLBACK ──
+        Log.w("GeminiClient", "All Gemini SEO keys exhausted — falling back to Sarvam AI")
+        return@withContext sarvamSeoFallback(title, articleContent, category)
+    }
+
+    /**
+     * Sarvam AI fallback for SEO generation.
+     * Called when every Gemini key + model combination has failed.
+     */
+    private suspend fun sarvamSeoFallback(
+        title: String,
+        articleContent: String,
+        category: String
+    ): SeoData {
+        return try {
+            val sarvam = SarvamApiClient(keyManager)
+            val result = sarvam.generateSeoData(
+                title          = title,
+                articleContent = articleContent,
+                category       = category
+            )
+            if (result.success) {
+                Log.i("GeminiClient", "Sarvam fallback succeeded for SEO")
+                result
+            } else {
+                Log.e("GeminiClient", "Sarvam SEO fallback failed: ${result.error}")
+                SeoData(false, error = "All Gemini keys exhausted and Sarvam SEO also failed: ${result.error}")
+            }
+        } catch (e: Exception) {
+            Log.e("GeminiClient", "Sarvam SEO fallback exception: ${e.message}")
+            SeoData(false, error = "All Gemini keys exhausted. Sarvam SEO fallback error: ${e.message}")
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -356,7 +426,6 @@ class GeminiApiClient(private val keyManager: ApiKeyManager) {
             }
         }
 
-        // ── THE CORE PROMPT — persona-driven, no bullet-point rules ──
         return """
 You are a seasoned news journalist with 15 years of experience writing for major digital publications. You have a sharp, direct voice — you get to the point fast, you never pad sentences, and your writing never sounds like it came from a machine.
 
@@ -413,12 +482,10 @@ Write the article now:
 
     private fun parseSeoResponse(raw: String): SeoData {
         return try {
-            // Strip <think>...</think> reasoning blocks emitted by Sarvam/other models
             val stripped = raw.replace(Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE), "").trim()
             val cleaned = stripped
                 .removePrefix("```json").removePrefix("```")
                 .removeSuffix("```").trim()
-            // Extract first JSON object in case there is any trailing text
             val jsonStart = cleaned.indexOf('{')
             val jsonEnd = cleaned.lastIndexOf('}')
             if (jsonStart == -1 || jsonEnd == -1 || jsonEnd < jsonStart) {
