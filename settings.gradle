@@ -11,8 +11,9 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
         maven { url = uri("https://jitpack.io") }
-        // Required for com.google.ai.edge.litert:litert-lm
-        maven { url = uri("https://storage.googleapis.com/download.tensorflow.org/maven2") }
+        // Required for com.google.ai.edge.litert:litert-lm:1.0.0
+        // google() already covers maven.google.com — kept explicit for clarity
+        maven { url = uri("https://maven.google.com") }
     }
 }
 rootProject.name = "NexuzyPublisher"

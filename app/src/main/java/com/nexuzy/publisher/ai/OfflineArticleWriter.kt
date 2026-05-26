@@ -8,7 +8,8 @@ import kotlinx.coroutines.withContext
  * OfflineArticleWriter — powered by Devil AI 2B
  * ══════════════════════════════════════════════════════════════════════
  * Writes full, publish-ready news articles 100% on-device.
- * Uses Gemma 3n E2B LiteRT (.litertlm) via Google LiteRT-LM runtime.
+ * Uses Gemma 3n E2B LiteRT (.litertlm) via Google LiteRT-LM runtime
+ * (com.google.ai.edge.litert:litert-lm:1.0.0 from maven.google.com).
  *
  * No API key needed. No internet needed at write time
  * (model auto-downloads on first run via ModelDownloadManager).
@@ -41,7 +42,7 @@ class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
             )
         }
 
-        onProgress?.invoke("WRITING", "\uD83D\uDE08 Devil AI 2B writing article offline\u2026")
+        onProgress?.invoke("WRITING", "😈 Devil AI 2B writing article offline…")
 
         val prompt = buildPrompt(title, description, category, targetWords)
         val sb     = StringBuilder()
@@ -53,7 +54,7 @@ class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
                 sb.append(token)
                 if (sb.length % 300 == 0) {
                     val words = sb.split(" ").size
-                    onProgress?.invoke("WRITING", "\uD83D\uDE08 Devil AI 2B writing\u2026 ~$words words")
+                    onProgress?.invoke("WRITING", "😈 Devil AI 2B writing… ~$words words")
                 }
             }
         )
@@ -67,7 +68,7 @@ class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
         val words   = cleaned.split(" ").size
 
         Log.i(TAG, "Devil AI 2B wrote: $words words")
-        onProgress?.invoke("DONE", "\u2705 Devil AI 2B wrote $words words offline")
+        onProgress?.invoke("DONE", "✅ Devil AI 2B wrote $words words offline")
 
         WriteResult(
             success     = cleaned.isNotBlank(),
@@ -77,9 +78,24 @@ class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
         )
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // Prompt (ChatML format — matches Gemma 3n IT template)
-    // ──────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────
+    // Prompt — Gemma 3n ChatML format
+    //
+    // Produces a properly structured published news article:
+    //   HEADLINE
+    //   (blank line)
+    //   By [Author] | [Category] | [Date]
+    //   (blank line)
+    //   LEAD PARAGRAPH  — answers Who/What/When/Where/Why in 2-3 sentences
+    //   (blank line)
+    //   BODY PARAGRAPH 1 — key facts and details
+    //   (blank line)
+    //   BODY PARAGRAPH 2 — background / context
+    //   (blank line)
+    //   BODY PARAGRAPH 3 — impact / reactions / quotes if available
+    //   (blank line)
+    //   CLOSING PARAGRAPH — what happens next / outlook
+    // ─────────────────────────────────────────────────────────────────
 
     private fun buildPrompt(
         title: String,
@@ -87,53 +103,105 @@ class OfflineArticleWriter(private val gemmaClient: OfflineGemmaClient) {
         category: String,
         targetWords: Int
     ): String {
-        val ctx = description.trim().take(500).ifBlank { "No additional context." }
+        val ctx = description.trim().take(600).ifBlank { "No additional context provided." }
+        val minWords = (targetWords * 0.85).toInt()
+        val maxWords = (targetWords * 1.15).toInt()
+
         return """<start_of_turn>user
-You are a professional news journalist. Write a factual, neutral, human-readable news article.
+You are a senior news journalist at a major publication. Write a complete, professionally structured news article ready for immediate publication.
 
-Category        : $category
-Headline source : $title
-Context         : $ctx
+TOPIC: $title
+CATEGORY: $category
+CONTEXT: $ctx
 
-RULES:
-- First line = article headline (no label prefix)
-- Blank line after headline
-- Lead paragraph: Who/What/When/Where/Why in \u22643 sentences
-- 3\u20134 body paragraphs: facts, background, impact
-- Short closing paragraph: what happens next
-- NO markdown, NO bullet points, NO sub-headers
-- NO AI filler: "notably", "in conclusion", "it is worth noting", "game-changer"
-- Natural contractions: it's, don't, hasn't, they've
-- Active voice, vary sentence length
-- Approximate total: $targetWords words
+ARTICLE STRUCTURE — follow this exactly, in this order:
 
-Write the complete article now. Output only the article.
+1. HEADLINE
+   Write a strong, factual headline (max 12 words). No label or prefix. Just the headline text.
+
+2. BLANK LINE
+
+3. BYLINE
+   Format: By Nexuzy Desk | $category
+
+4. BLANK LINE
+
+5. LEAD PARAGRAPH (2-3 sentences)
+   Answer all of: Who, What, When, Where, Why. This is the most important paragraph.
+   Use active voice. Be specific.
+
+6. BLANK LINE
+
+7. BODY PARAGRAPH 1 — Key Facts (3-4 sentences)
+   The most important specific facts, numbers, names, statements.
+
+8. BLANK LINE
+
+9. BODY PARAGRAPH 2 — Background / Context (3-4 sentences)
+   Why this matters. Historical context, related events, or broader implications.
+
+10. BLANK LINE
+
+11. BODY PARAGRAPH 3 — Impact / Expert View (2-3 sentences)
+    What does this mean for readers? Any reactions, expert opinions, or what is at stake.
+
+12. BLANK LINE
+
+13. CLOSING PARAGRAPH (2 sentences)
+    What happens next. Expected timeline, next steps, or outlook.
+
+WRITING RULES:
+- Target length: $minWords to $maxWords words total
+- Plain prose ONLY — no bullet points, no asterisks, no markdown, no sub-headers
+- NO AI filler words: notably, furthermore, moreover, it is worth noting, in conclusion,
+  this underscores, pivotal, landscape, delve, shed light on, game-changer, paradigm shift
+- Use natural contractions: it's, don't, hasn't, they've, won't
+- Vary sentence length — short punchy sentences mixed with longer ones
+- Active voice preferred throughout
+- Every paragraph must be separated by a blank line
+- Do NOT add any labels like "LEAD:", "BODY:", "CLOSING:" — just the text
+- Start writing the article immediately. Output ONLY the article.
 <end_of_turn>
 <start_of_turn>model
 """
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // Post-processing
-    // ──────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────
+    // Post-processing — clean Gemma control tokens and fix structure
+    // ─────────────────────────────────────────────────────────────────
 
     private fun postProcess(raw: String, originalTitle: String): String {
         var text = raw.trim()
 
-        // Strip Gemma control tokens
+        // Strip all Gemma / ChatML control tokens
         listOf(
-            "<end_of_turn>", "<start_of_turn>", "<bos>", "<eos>",
-            "<|end|>", "<|assistant|>", "<|user|>", "<|system|>"
-        ).forEach { text = text.replace(it, "") }
+            "<end_of_turn>", "<start_of_turn>model", "<start_of_turn>user",
+            "<start_of_turn>", "<bos>", "<eos>",
+            "<|end|>", "<|assistant|>", "<|user|>", "<|system|>",
+            "<|im_end|>", "<|im_start|>"
+        ).forEach { token ->
+            text = text.replace(token, "")
+        }
 
-        text = text.trim()
+        // Strip markdown artifacts that Gemma sometimes outputs
+        text = text
+            .replace(Regex("^#{1,3}\\s+", RegexOption.MULTILINE), "") // ## headers
+            .replace(Regex("\\*{1,3}([^*]+)\\*{1,3}"), "$1")           // **bold** / *italic*
+            .replace(Regex("^[-*]\\s+", RegexOption.MULTILINE), "")    // bullet points
+            .replace(Regex("^\\d+\\.\\s+", RegexOption.MULTILINE), "") // numbered lists
+
+        // Collapse 3+ consecutive blank lines to 2
+        text = text.replace(Regex("\n{3,}"), "\n\n").trim()
+
         val lines = text.lines().filter { it.isNotBlank() }
         if (lines.isEmpty()) return ""
 
-        val hasHeadline = lines.first().length in 15..130
-        return if (hasHeadline) text else "$originalTitle\n\n$text"
+        // Ensure headline exists — if first line is too short or missing, prepend original title
+        val firstLine = lines.first().trim()
+        return if (firstLine.length >= 15) text else "$originalTitle\n\n${text}"
     }
 
+    // Estimate token count: ~0.75 words per token for English
     private fun estimateTokens(targetWords: Int): Int =
-        (targetWords / 0.75).toInt().coerceIn(256, 2048)
+        (targetWords / 0.75).toInt().coerceIn(512, 2048)
 }
