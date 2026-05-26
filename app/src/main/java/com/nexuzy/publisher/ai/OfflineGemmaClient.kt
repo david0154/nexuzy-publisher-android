@@ -13,28 +13,26 @@ import kotlin.coroutines.resume
 /**
  * OfflineGemmaClient — "Devil AI 2B"
  * ══════════════════════════════════════════════════════════════════════
- * On-device LLM using Google Gemma 3n E2B (LiteRT int4).
+ * On-device LLM using Google Gemma 2B IT (LiteRT INT4, GPU-optimised).
  *
- * Model file : gemma-3n-E2B-it-int4.litertlm
- * Source     : huggingface.co/google/gemma-3n-E2B-it-litert-lm
+ * Model file : gemma-2b-it-gpu-int4.bin (~500 MB)
+ * Source     : Google public CDN — no token, no login, auto-downloads on first launch
  * Runtime    : Google LiteRT-LM  (com.google.ai.edge.litert:litert-lm:1.0.0)
  *
  * build.gradle (app):
- *   dependencies {
- *     implementation 'com.google.ai.edge.litert:litert-lm:1.0.0'
- *   }
- * settings.gradle (repositories):
+ *   implementation 'com.google.ai.edge.litert:litert-lm:1.0.0'
+ * settings.gradle:
  *   maven { url = uri("https://maven.google.com") }
  *
- * HuggingFace token required (gated model). Save once via:
- *   getDownloadManager().saveHuggingFaceToken("hf_xxx")
+ * Model downloads automatically via ModelDownloadManager.autoDownloadIfNeeded().
+ * No HuggingFace account or token required.
  */
 class OfflineGemmaClient(private val context: Context) {
 
     companion object {
         private const val TAG = "DevilAI2B"
         const val MODEL_DISPLAY_NAME = "Devil AI 2B"
-        const val MODEL_DESCRIPTION  = "On-device AI writer \u2022 Gemma 3n E2B \u2022 No internet needed"
+        const val MODEL_DESCRIPTION  = "On-device AI writer • Gemma 2B IT • Auto-downloads • No internet needed at runtime"
         private const val MAX_TOKENS  = 1024
         private const val TEMPERATURE = 0.7f
         private const val TOP_K       = 40
@@ -66,7 +64,7 @@ class OfflineGemmaClient(private val context: Context) {
         if (!isModelReady()) {
             return@withContext GenerateResult(
                 success = false,
-                error   = "Devil AI 2B model not downloaded yet."
+                error   = "Devil AI 2B model not downloaded yet. It will be ready shortly."
             )
         }
 
@@ -84,11 +82,8 @@ class OfflineGemmaClient(private val context: Context) {
             val llm = LlmInference.createFromOptions(context, options)
 
             try {
-                if (onToken != null) {
-                    runStreaming(llm, prompt, onToken)
-                } else {
-                    runSync(llm, prompt)
-                }
+                if (onToken != null) runStreaming(llm, prompt, onToken)
+                else                runSync(llm, prompt)
             } finally {
                 try { llm.close() } catch (_: Exception) {}
             }
@@ -97,10 +92,6 @@ class OfflineGemmaClient(private val context: Context) {
             GenerateResult(success = false, error = "Inference error: ${e.message}")
         }
     }
-
-    // ──────────────────────────────────────────────────────────────────
-    // Synchronous inference
-    // ──────────────────────────────────────────────────────────────────
 
     private fun runSync(llm: LlmInference, prompt: String): GenerateResult {
         val output = llm.generateResponse(prompt)
@@ -114,38 +105,23 @@ class OfflineGemmaClient(private val context: Context) {
             )
     }
 
-    // ──────────────────────────────────────────────────────────────────
-    // Streaming inference via LlmInference.LlmInferenceResultListener
-    // ──────────────────────────────────────────────────────────────────
-
     private suspend fun runStreaming(
         llm: LlmInference,
         prompt: String,
         onToken: (String) -> Unit
     ): GenerateResult = suspendCancellableCoroutine { cont ->
-
         val sb = StringBuilder()
-
         llm.generateResponseAsync(prompt) { partialResult, done ->
             val token = partialResult ?: ""
-            if (token.isNotBlank()) {
-                sb.append(token)
-                onToken(token)
-            }
-            if (done) {
+            if (token.isNotBlank()) { sb.append(token); onToken(token) }
+            if (done && cont.isActive) {
                 val output = sb.toString().trim()
-                if (cont.isActive) {
-                    cont.resume(
-                        if (output.isNotBlank())
-                            GenerateResult(
-                                success         = true,
-                                text            = output,
-                                tokensGenerated = output.split(" ").size
-                            )
-                        else
-                            GenerateResult(success = false, error = "Model returned empty output")
-                    )
-                }
+                cont.resume(
+                    if (output.isNotBlank())
+                        GenerateResult(success = true, text = output, tokensGenerated = output.split(" ").size)
+                    else
+                        GenerateResult(success = false, error = "Model returned empty output")
+                )
             }
         }
     }
