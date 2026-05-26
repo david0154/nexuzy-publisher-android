@@ -1,328 +1,173 @@
-# 📰 Nexuzy Publisher — Android
+# 📰 Nexuzy Publisher
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Platform-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white" />
-  <img src="https://img.shields.io/badge/Language-Kotlin-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white" />
-  <img src="https://img.shields.io/badge/AI-Gemini%20%7C%20OpenAI%20%7C%20Sarvam-FF6B35?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/On--Device-Gemma%202B-34A853?style=for-the-badge&logo=google&logoColor=white" />
-  <img src="https://img.shields.io/badge/CMS-WordPress-21759B?style=for-the-badge&logo=wordpress&logoColor=white" />
-  <img src="https://img.shields.io/badge/License-MIT-blue?style=for-the-badge" />
-</p>
+![Android](https://img.shields.io/badge/Platform-Android%208.0%2B-brightgreen)
+![Kotlin](https://img.shields.io/badge/Language-Kotlin-blue)
+![AI](https://img.shields.io/badge/AI-Gemini%20%7C%20Devil%20AI%202B%20(Gemma)%20%7C%20OpenAI-purple)
+![Offline](https://img.shields.io/badge/On--Device-Gemma%202B%20Auto--Download-orange)
+![License](https://img.shields.io/badge/License-MIT-lightgrey)
 
-> **Nexuzy Publisher** is an AI-powered Android news publishing app that transforms RSS feeds into fully verified, SEO-optimised WordPress draft articles — automatically. It combines **Gemini AI** for writing, **OpenAI** for fact verification, **Sarvam AI** for grammar correction, an **on-device Gemma 2B writer** for offline AI authoring, and a **WordPress REST API** push pipeline into one seamless editorial workflow.
+Nexuzy Publisher is an Android app that turns your phone into a full AI-powered news publishing studio. Fetch RSS feeds, auto-write full articles with on-device or cloud AI, find images, and publish directly to WordPress — all from your pocket.
 
 ---
 
-## ✨ Features
+## ✨ Key Features
 
-### 🔐 Authentication & Onboarding
-- **Google Sign-In** via Firebase Authentication (`GoogleSignInManager`)
-- Auto-login if a session already exists — skips directly to `MainActivity`
-- Optional **Skip Login** for offline/local-only use
-- Firebase Firestore **user profile sync** on first login (`upsertUserProfile`)
-- Encrypted credential storage using **Jetpack Security `EncryptedSharedPreferences`**
+- 📰 **RSS Feed Reader** — aggregate news from any RSS/Atom source
+- 🤖 **David AI Chat** — conversational assistant for writing, publishing, and research
+- 😈 **Devil AI 2B** — on-device Gemma 2B article writing (auto-downloads, no API key)
+- ☁️ **Gemini Cloud AI** — Gemini 2.0 Flash, 1.5 Flash, Flash-Lite fallback chain
+- 📝 **Article Rewriter** — rewrites RSS articles into original, publish-ready content
+- 🖼️ **Image Search** — DuckDuckGo image search integration
+- 🚀 **WordPress Publisher** — publish to any self-hosted WordPress via REST API
+- 🌦️ **Weather Context** — local weather auto-injected into article context
+- 🔑 **Multi-key Support** — rotate multiple Gemini/OpenAI keys automatically
 
-### ⚙️ Settings & API Configuration
-- **Gemini API Key** — primary AI writing engine (Google Generative AI)
-- **OpenAI API Key** — fact verification & authenticity check
-- **Sarvam AI API Key** — grammar and spelling correction (Indian language support)
-- **WordPress Site URL, Username, Application Password** — for REST API draft push
-- **Ads Code** *(optional)* — injected into article HTML before WordPress push
-- **Support Email** and **Privacy Policy URL** — in-app display
-- All keys stored in `EncryptedSharedPreferences` — never in plaintext
+---
 
-### 📡 RSS Feed Management
-- Add unlimited RSS feed URLs with **name** and **category** tags
-- Feeds stored in **Room Database** (`RssFeedEntity`)
-- Delete individual feeds via long-press
-- **Fetch News** button triggers full RSS scrape across all active feeds
-- Supports RSS 2.0 and Atom feed formats
-- Automatic **image scraping** from `<media:content>`, `<enclosure>`, Open Graph `og:image`, and first `<img>` tag in article body
-- Per-feed `limitPerFeed` control (default: 20 items)
+## 🧠 AI Pipeline (v3)
 
-### 📊 News Scoring & Discovery (Dashboard)
-- **Today's News filter** — strips items older than 24 hours using multi-format date parsing (IST, GMT, RFC-1123, ISO-8601)
-- **Scoring Engine** — scores each article by:
-  - Presence of image (+10)
-  - Rich description length (+10)
-  - Hot keywords: `breaking`, `live`, `urgent`, `election`, `war`, `market`, `ai`, `launch` (+8 each)
-  - Emotional/viral words: `shocking`, `viral`, `exclusive`, `revealed`, `first` (+6 each)
-  - Title length sweet spot (+5)
-  - Recently published (+15)
-- **Three news sections displayed:**
-  - 🕐 **Latest News** — all today's items, newest first (up to 20)
-  - 🔥 **Hot News** — high-scoring `isHot` articles (top 10)
-  - 🚀 **Potential Viral** — `isPotentialViral` candidates (top 10)
-- **Related News Clustering** — groups articles by shared keywords into topic clusters
-- Tap any news item → opens **AI Article Editor**
-
-### 🤖 AI Pipeline (5-Step)
-
-The full pipeline is orchestrated by `AiPipeline.kt` and `NewsWorkflowManager.kt`:
+Every article goes through a smart fallback chain. No single point of failure.
 
 ```
-Step 1  ─  OpenAI Fact Verification
-           └─ Checks article authenticity, returns confidence score (0–100)
-           └─ Suspicious articles are flagged with reason text
-
-Step 2  ─  Gemini Article Rewrite  (cloud)  OR  Gemma 2B On-Device  (offline)
-           └─ Cloud: Rewrites full article body in professional news style
-           └─ On-Device: Gemma 2B runs locally — no API key, no internet needed
-           └─ Expands thin RSS description into 400–800 word article
-           └─ Returns rewritten title + body
-
-Step 3  ─  Sarvam AI Grammar & Spelling Check
-           └─ Corrects grammar, spelling, punctuation
-           └─ Supports English + Indian language content
-
-Step 4  ─  Gemini SEO Generation
-           └─ Generates: focus keyphrase, meta description, tags, meta keywords
-           └─ All saved to Article entity for WordPress Yoast/RankMath integration
-
-Step 5  ─  Article Image Download
-           └─ Downloads RSS image URL to local storage (/files/article_images/)
-           └─ Used as WordPress featured image on push
-           └─ Falls back to remote RSS imageUrl if download fails
+┌──────────────────────────────────────────────────┐
+│  ARTICLE GENERATION PIPELINE                    │
+├──────────────────────────────────────────────────┤
+│                                                │
+│  Step 1: Gemini Cloud AI                       │
+│    gemini-2.0-flash (primary)                  │
+│    gemini-1.5-flash                            │
+│    gemini-2.0-flash-lite                       │
+│    gemini-1.5-flash-8b                         │
+│         ↓ all keys exhausted                   │
+│                                                │
+│  Step 2: 😈 Devil AI 2B (on-device Gemma 2B)    │
+│    ✓ 100% offline, zero API cost               │
+│    ✓ Auto-downloads on first launch (~500 MB)  │
+│    ✓ No token, no login, no internet needed    │
+│         ↓ model not yet downloaded              │
+│                                                │
+│  Step 3: OpenAI fallback                       │
+│         ↓                                      │
+│                                                │
+│  Step 4: Gemini flash-lite grammar polish       │
+│  Step 5: OpenAI final humanise pass            │
+│                                                │
+│  ✅ Publish-ready article                       │
+└──────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 🧠 On-Device AI Writer — Gemma 2B
+## 😈 Devil AI 2B — On-Device AI Writer
 
-Nexuzy Publisher includes a fully **offline, on-device AI article writer** powered by **Google's Gemma 2B** model running locally on the Android device via **MediaPipe LLM Inference** — no internet connection, no API key, and zero cloud cost required.
+Devil AI 2B is powered by **Google Gemma 2B IT** running 100% on your Android device via the **LiteRT-LM runtime** (`com.google.ai.edge.litert:litert-lm:1.0.0`).
+
+### Auto-Download (No Setup Required)
+
+The model downloads **automatically** on first app launch. No HuggingFace account, no token, no manual steps.
+
+| Detail | Value |
+|---|---|
+| **Model** | Gemma 2B IT INT4 (GPU-optimised) |
+| **Size** | ~500 MB (one-time download) |
+| **Source** | Google public CDN (no auth required) |
+| **Runtime** | LiteRT-LM (Google AI Edge) |
+| **Storage** | `Android/data/com.nexuzy.publisher/files/models/` |
+| **Min RAM** | 3 GB |
+| **Min Android** | 8.0 (API 26) |
 
 ### How It Works
 
-The on-device writer is a **drop-in alternative** to the cloud Gemini step in the AI pipeline. When enabled, the device itself generates the article using the Gemma 2B INT4-quantised model stored on local storage.
+1. App launches → `ModelDownloadManager.autoDownloadIfNeeded()` called
+2. Android `DownloadManager` fetches model from Google CDN in background
+3. System notification shows download progress
+4. Once complete, Devil AI 2B is ready instantly — no restart needed
+5. All article generation works fully offline from this point
+
+### Article Output Format
+
+Every Devil AI 2B article follows a proper news structure:
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│  ON-DEVICE AI WRITER — Devil ai 2B                                      │
-├──────────────────────────────────────────────────────────────────────┤
-│  Model      : Gemma 2B (INT4 quantised, ~1.4 GB)                     │
-│  Framework  : MediaPipe LLM Inference Task (tasks-genai)             │
-│  Runtime    : CPU / GPU delegate (auto-selected)                     │
-│  Storage    : /sdcard/Download/devil2b-2b-it-q4_k_m.gguf               │
-│               OR /data/local/tmp/llm/ (push via adb)                 │
-│  Internet   : ❌ Not required                                         │
-│  API Key    : ❌ Not required                                         │
-│  Cost       : ✅ Zero — fully local inference                        │
-└──────────────────────────────────────────────────────────────────────┘
-```
+HEADLINE (strong, factual, max 12 words)
 
-### Requirements
+By Nexuzy Desk | Category
 
-| Requirement | Minimum | Recommended |
-|-------------|---------|-------------|
-| Android version | Android 9.0 (API 28) | Android 12+ |
-| RAM | 4 GB | 6 GB+ |
-| Free storage | 1.6 GB | 2 GB+ |
-| Processor | ARM64 (any modern SoC) | Snapdragon 8 Gen 1 / Dimensity 9000+ |
-| GPU delegate | Optional | Adreno 650+ / Mali-G710+ for faster inference |
+LEAD — Who/What/When/Where/Why (2-3 sentences)
 
-### Model Setup
+KEY FACTS — specific details, numbers, names
 
-**Step 1 — Download the Gemma 2B model file**
+BACKGROUND — context and history
 
-Download the INT4-quantised GGUF from Hugging Face:
-```
-https://huggingface.co/google/gemma-2b-it-GGUF
-File: gemma-2b-it-q4_k_m.gguf  (~1.4 GB)
-```
+IMPACT — what it means for readers
 
-**Step 2 — Place the model file on your device**
-
-Option A — Copy via file manager:
-```
-Place at: /sdcard/Download/gemma-2b-it-q4_k_m.gguf
-```
-
-Option B — Push via ADB:
-```bash
-adb push gemma-2b-it-q4_k_m.gguf /data/local/tmp/llm/gemma-2b-it-q4_k_m.gguf
-```
-
-**Step 3 — Enable in Settings**
-
-Go to **Settings → AI Writer Mode** and select **On-Device (Gemma 2B)**.
-The app will scan for the model file on launch and activate the local inference engine.
-
-### Features
-
-- **Fully offline** — works with no Wi-Fi or mobile data
-- **Zero API cost** — no Gemini quota consumed for the write step
-- **Private** — article content never leaves the device during generation
-- **Streaming output** — article text appears word-by-word in real time as the model generates
-- **Same pipeline compatibility** — output feeds directly into Steps 3–5 (Sarvam grammar, SEO, image download) exactly like the cloud writer
-- **Auto-fallback** — if the model file is missing or inference fails, the pipeline automatically falls back to cloud Gemini with a toast notification
-- **Progress indicator** — token generation speed (tokens/sec) shown in the editor status bar during inference
-
-### Writing Quality
-
-Gemma 2B on-device produces shorter articles (~300–500 words) compared to cloud Gemini (~600–900 words). For best results:
-
-- Provide a **rich RSS description** (longer context = better article)
-- The **Sarvam grammar pass** (Step 3) cleans any repetitive phrasing from the smaller model
-- Use **cloud Gemini** for flagship articles; **on-device** for high-volume or offline publishing
-
-### Architecture
-
-```
-OnDeviceAiWriter.kt
-  └─ MediaPipe LlmInference  (tasks-genai dependency)
-      └─ Model: gemma-2b-it-q4_k_m.gguf
-      └─ inferenceCallback → streams tokens to UI
-      └─ generateAsync() → returns full article string
-
-AiPipeline.kt
-  └─ if (useOnDeviceWriter) OnDeviceAiWriter.write(rssItem)
-     else                   GeminiApiClient.writeNewsArticle(...)
-```
-
-### Gradle Dependency
-
-```groovy
-// app/build.gradle
-dependencies {
-    // On-device LLM inference (Gemma 2B)
-    implementation("com.google.mediapipe:tasks-genai:0.10.22")
-}
-```
-
-> **Note:** The `tasks-genai` dependency replaces the earlier `litert-lm:1.0.0-beta1` dependency which had restricted Maven access. MediaPipe Tasks GenAI is the stable, publicly available alternative.
-
----
-
-### ✏️ Article Editor (`ArticleEditorActivity`)
-- Pre-filled with RSS title + description on open
-- **Run AI Pipeline** button — runs all 5 steps with live progress status
-- **AI Mode chip** shows active writer: `☁️ Cloud (Gemini)` or `📱 On-Device (Gemma 2B)`
-- Gemini / Gemma **rewritten title** auto-applied to title field after pipeline
-- Full article body editable after generation
-- **AI Chips** show pipeline completion: `Gemini ✅ | OpenAI ✅ | Sarvam ✅ | SEO ✅`
-- **Fact feedback** panel shows OpenAI confidence score and reasoning
-- **Image status bar** shows RSS image found → downloaded path
-- **Save as Draft** — persists fully populated `Article` to Room DB including:
-  - SEO: tags, metaKeywords, focusKeyphrase, metaDescription
-  - Image: imageUrl (remote) + imagePath (local)
-  - Source: sourceUrl, sourceName, category
-  - AI flags: geminiChecked, openaiChecked, sarvamChecked, factCheckPassed, confidenceScore
-- **Publish Draft to WordPress** — pushes immediately as WP draft with ads injection
-- Back-press confirmation: _"Save draft before leaving?"_
-
-### 🗂️ Articles Tab (Draft Management)
-- Lists all locally saved articles from Room DB
-- Shows status badge: `draft` / `published`
-- Open any article to re-edit or re-push
-- Article count shown in Dashboard widget
-
-### 🌐 WordPress Integration
-- REST API push via `WordPressApiClient.kt`
-- **Application Password** authentication (secure, no OAuth needed)
-- Pushes article as **draft** (never auto-publishes)
-- Sets: title, content, excerpt (meta description), tags, categories, slug
-- Injects **ads code** into article HTML before push (optional)
-- Uploads downloaded image as **featured image** (media upload + post attach)
-- Full SEO meta fields sent for Yoast/RankMath compatibility
-- `pushNewsDraftWithSeo()` — full SEO push
-- `pushDraft()` — quick push from editor
-- Returns `postId` — saved locally to Room for tracking
-- **Test Connection** — validates credentials before any push
-- Saves `wordpressPostId` back to local Article record after success
-
-### 🔒 Duplicate Detection
-- Before any article is processed, `articleDao().countBySourceUrl(link)` checks Room DB
-- Duplicate RSS items are skipped silently with a log entry
-- Prevents the same story being processed and pushed multiple times
-
-### 📦 Local Database (Room)
-- `AppDatabase` with 4 DAOs:
-  | DAO | Entity | Purpose |
-  |-----|--------|---------|
-  | `ArticleDao` | `Article` | All generated/saved articles |
-  | `RssFeedDao` | `RssFeedEntity` | Saved RSS feed URLs |
-  | `WordPressSiteDao` | `WordPressSite` | WP site credentials |
-  | `UserDao` | `UserProfile` | Firebase user profile cache |
-
-### ⚙️ Background Processing
-- **WorkManager** (`NewsPublisherWorker`) for scheduled background batch runs
-- Runs `fetchVerifyWriteSaveAndPushDraft()` — fetches top-15 articles, full pipeline, pushes all
-- Configurable scheduling from Settings
-
----
-
-## 🗺️ Complete App Workflow
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  1. LAUNCH                                                          │
-│     └─ Auto-login check → Google Sign-In OR Skip                   │
-├─────────────────────────────────────────────────────────────────────┤
-│  2. SETTINGS (first-time setup)                                     │
-│     └─ Enter: Gemini API Key  (or choose On-Device mode)            │
-│     └─ Enter: OpenAI API Key                                        │
-│     └─ Enter: Sarvam AI API Key                                     │
-│     └─ Enter: WordPress URL + Username + App Password               │
-│     └─ Enter: Ads Code (optional)                                   │
-│     └─ Select AI Writer Mode: ☁️ Cloud (Gemini) | 📱 On-Device (Gemma 2B) │
-│     └─ Save → all encrypted in EncryptedSharedPreferences           │
-├─────────────────────────────────────────────────────────────────────┤
-│  3. RSS TAB                                                         │
-│     └─ Add RSS feed URLs (name + category)                          │
-│     └─ Tap "Fetch News" → RssFeedParser scrapes all feeds           │
-│     └─ Sarvam duplicate check → dedup by source URL                │
-│     └─ Results posted to NewsViewModel (shared state)              │
-│     └─ Auto-navigate to Dashboard                                   │
-├─────────────────────────────────────────────────────────────────────┤
-│  4. DASHBOARD                                                       │
-│     └─ Latest News list (all today's items)                         │
-│     └─ 🔥 Hot News list (high score)                                │
-│     └─ 🚀 Potential Viral list (viral score)                        │
-│     └─ Tap any item → ArticleEditorActivity                        │
-├─────────────────────────────────────────────────────────────────────┤
-│  5. AI ARTICLE EDITOR                                               │
-│     └─ Pre-filled title + description from RSS                      │
-│     └─ AI Mode: ☁️ Cloud (Gemini) OR 📱 On-Device (Gemma 2B)       │
-│     └─ Tap "Run AI Pipeline":                                       │
-│         ├─ Step 1: OpenAI → fact verify + confidence score          │
-│         ├─ Step 2: Gemini (cloud) OR Gemma 2B (on-device) → write   │
-│         ├─ Step 3: Sarvam → grammar + spelling correction           │
-│         ├─ Step 4: Gemini → SEO meta (tags, keyphrase, description) │
-│         └─ Step 5: Download RSS image to local storage              │
-│     └─ Rewritten title auto-applied to title field                  │
-│     └─ Edit content if needed                                       │
-│     └─ "Save Draft" → Room DB (full Article with all SEO fields)    │
-│     └─ "Publish Draft" → WordPress REST API push                    │
-├─────────────────────────────────────────────────────────────────────┤
-│  6. WORDPRESS TAB                                                   │
-│     └─ Test Connection → validates WP credentials                   │
-│     └─ View local drafts awaiting push                              │
-│     └─ Manual push any saved draft                                  │
-└─────────────────────────────────────────────────────────────────────┘
+CLOSING — what happens next
 ```
 
 ---
 
-## 🏗️ Architecture & Tech Stack
+## 📱 Screenshots
 
-| Layer | Technology |
-|-------|------------|
+> Add screenshots to `screenshots/` folder and they will appear here.
+
+---
+
+## 🛠️ Tech Stack
+
+| Component | Technology |
+|---|---|
 | Language | Kotlin |
-| UI | AndroidX + ViewBinding + Navigation Component |
-| Architecture | MVVM — ViewModel + LiveData + Repository |
-| Local DB | Room (SQLite) with 4 entities |
-| Networking | OkHttp 4 + Gson |
-| AI — Writing (Cloud) | Google Gemini API (`generativelanguage.googleapis.com`) |
-| AI — Writing (On-Device) | **Gemma 2B INT4** via MediaPipe LLM Inference (`tasks-genai`) |
-| AI — Fact Check | OpenAI Chat Completions API (`gpt-4o-mini`) |
-| AI — Grammar | Sarvam AI API |
-| Auth | Firebase Authentication (Google Sign-In) |
-| Cloud DB | Firebase Firestore (user profile) |
-| Security | Jetpack Security `EncryptedSharedPreferences` |
-| Background Jobs | WorkManager |
-| Image Loading | Android `ImageDownloader` (HTTP download to local storage) |
-| RSS Parsing | Custom `RssFeedParser` (OkHttp + XmlPullParser) |
-| WordPress | WordPress REST API v2 (Application Passwords) |
+| Min SDK | Android 8.0 (API 26) |
+| Architecture | MVVM + Repository |
+| Database | Room |
+| Networking | OkHttp + Retrofit |
+| Image Loading | Glide |
+| On-Device AI | Google LiteRT-LM (Gemma 2B IT) |
+| Cloud AI | Gemini 2.0 Flash, 1.5 Flash, OpenAI GPT-4o |
+| RSS Parsing | Rome + Jsoup |
+| Auth | Firebase Auth + Google Sign-In |
+| Publishing | WordPress REST API |
+| Navigation | Navigation Component |
+| Background Work | WorkManager + Android DownloadManager |
+
+---
+
+## 🚀 Setup
+
+### 1. Clone the repo
+
+```bash
+git clone https://github.com/david0154/nexuzy-publisher-android.git
+cd nexuzy-publisher-android
+```
+
+### 2. Add `google-services.json`
+
+Download from your Firebase console and place in `app/google-services.json`.
+
+### 3. Add API keys in the app
+
+Open the app → Settings and add:
+
+| Key | Where to get |
+|---|---|
+| Gemini API Key | [aistudio.google.com](https://aistudio.google.com) (free) |
+| OpenAI API Key | [platform.openai.com](https://platform.openai.com) (optional) |
+| WordPress URL + credentials | Your WordPress site → Users → Application Passwords |
+
+> **No HuggingFace token needed.** Devil AI 2B downloads automatically.
+
+### 4. Build and run
+
+```bash
+./gradlew assembleDebug
+```
+
+Or open in Android Studio and press ▶ Run.
+
+### 5. Devil AI 2B auto-downloads
+
+On first launch the Gemma 2B model (~500 MB) will start downloading automatically in the background. You’ll see a system notification. Gemini cloud AI works immediately while the download completes.
 
 ---
 
@@ -330,186 +175,46 @@ dependencies {
 
 ```
 app/src/main/java/com/nexuzy/publisher/
-│
-├── ui/
-│   ├── auth/
-│   │   └── LoginActivity.kt          # Google Sign-In + Firebase auth
-│   ├── main/
-│   │   ├── MainActivity.kt           # Bottom nav host (5 tabs)
-│   │   ├── NewsViewModel.kt          # Shared ViewModel — DailyNewsSnapshot
-│   │   ├── DashboardFragment.kt      # Latest / Hot / Viral news lists
-│   │   ├── RssFragment.kt            # RSS feed management + fetch trigger
-│   │   ├── ArticlesFragment.kt       # Local draft list
-│   │   ├── AiWriterFragment.kt       # Shortcut hub to editor
-│   │   └── WordPressFragment.kt      # WP connection + drafts list
-│   ├── editor/
-│   │   ├── ArticleEditorActivity.kt  # Full AI pipeline editor UI
-│   │   └── ArticleEditorViewModel.kt # Pipeline state management
-│   └── settings/
-│       └── SettingsActivity.kt       # API keys + WP credentials
-│
 ├── ai/
-│   ├── AiPipeline.kt                 # 5-step AI orchestrator
-│   └── OnDeviceAiWriter.kt           # Gemma 2B on-device inference (MediaPipe)
-│
-├── workflow/
-│   └── NewsWorkflowManager.kt        # Batch + single-item workflow logic
-│
+│   ├── AiPipeline.kt              # Main orchestrator for RSS → article flow
+│   ├── ModelDownloadManager.kt    # Auto-downloads Gemma 2B from Google CDN
+│   ├── OfflineGemmaClient.kt      # LiteRT-LM inference wrapper
+│   └── OfflineArticleWriter.kt    # Structured article prompt + post-processing
 ├── network/
-│   ├── GeminiApiClient.kt            # Cloud Gemini REST client
-│   ├── SarvamApiClient.kt            # Sarvam AI grammar + SEO client
-│   ├── RssFeedParser.kt              # RSS 2.0 / Atom feed scraper
-│   └── WordPressApiClient.kt         # WP REST API v2 client
-│
+│   ├── ArticleGeneratorClient.kt  # Gemini → Devil AI 2B → OpenAI pipeline
+│   ├── GeminiApiClient.kt         # Gemini REST client
+│   ├── OpenAiApiClient.kt         # OpenAI REST client
+│   ├── DuckDuckGoSearchClient.kt  # Image search
+│   ├── RssFeedParser.kt           # RSS/Atom parser
+│   ├── WeatherClient.kt           # Local weather context
+│   └── WordPressApiClient.kt      # WordPress REST publisher
 ├── data/
-│   ├── db/
-│   │   ├── AppDatabase.kt
-│   │   ├── ArticleDao.kt
-│   │   ├── RssFeedDao.kt
-│   │   ├── WordPressSiteDao.kt
-│   │   └── UserDao.kt
-│   ├── model/
-│   │   ├── Article.kt
-│   │   ├── RssItem.kt
-│   │   ├── RssFeedEntity.kt
-│   │   ├── WordPressSite.kt
-│   │   └── UserProfile.kt
-│   └── prefs/
-│       └── ApiKeyManager.kt          # EncryptedSharedPreferences wrapper
-│
-└── worker/
-    └── NewsPublisherWorker.kt        # WorkManager background background batch job
+│   ├── db/                        # Room database
+│   └── prefs/                     # ApiKeyManager, SharedPreferences
+├── ui/                            # Fragments, Activities, ViewModels
+└── worker/                        # WorkManager background tasks
 ```
 
 ---
 
-## 🚀 Setup Guide
+## 🔄 AI Fallback Chain Summary
 
-### Prerequisites
-- Android Studio Hedgehog (2023.1.1) or newer
-- Android SDK 26+ (minSdk 26)
-- A Google Firebase project
-- API keys for Gemini, OpenAI, Sarvam AI
-- A WordPress site with Application Passwords enabled
-- *(Optional)* Gemma 2B GGUF model file for on-device writing
-
-### 1. Clone the repo
-```bash
-git clone https://github.com/david0154/nexuzy-publisher-android.git
-cd nexuzy-publisher-android
-```
-
-### 2. Firebase Setup
-1. Go to [Firebase Console](https://console.firebase.google.com)
-2. Create a new project → Add Android app
-3. Package name: `com.nexuzy.publisher`
-4. Download `google-services.json` → place in `app/`
-5. Enable **Authentication → Google Sign-In**
-6. Enable **Firestore Database**
-
-### 3. Build & Run
-```bash
-./gradlew assembleDebug
-```
-Or open in Android Studio and click **Run ▶**
-
-### 4. First Launch Configuration
-1. **Login** with Google (or tap Skip)
-2. Go to **Settings** tab
-3. Enter your API keys:
-   - Gemini: [Get key](https://aistudio.google.com/app/apikey)
-   - OpenAI: [Get key](https://platform.openai.com/api-keys)
-   - Sarvam: [Get key](https://www.sarvam.ai)
-4. Enter WordPress credentials:
-   - Site URL: `https://yoursite.com`
-   - Username: your WP username
-   - App Password: WP Admin → Users → Application Passwords → Create new
-5. *(Optional)* Select **On-Device (Gemma 2B)** as AI Writer Mode — see [On-Device AI Writer](#-on-device-ai-writer--gemma-2b) section above for model setup
-6. Tap **Save**
-
-### 5. Add RSS Feeds & Publish
-1. Go to **RSS** tab → Add feed URLs
-2. Tap **Fetch News**
-3. Tap any story on the Dashboard
-4. Tap **Run AI Pipeline** in the editor
-5. Review → **Publish Draft to WordPress**
+| Priority | Provider | Requires | Works Offline? |
+|---|---|---|---|
+| 1st | Gemini 2.0 Flash | Gemini API key | No |
+| 2nd | Gemini 1.5 Flash | Gemini API key | No |
+| 3rd | Gemini Flash-Lite | Gemini API key | No |
+| 4th | 😈 Devil AI 2B | Nothing (auto-download) | **Yes** |
+| 5th | OpenAI GPT-4o | OpenAI API key | No |
 
 ---
 
-## 🔑 API Key Security
+## 📝 License
 
-- All API keys are stored using **AndroidX Security `EncryptedSharedPreferences`** (AES-256-GCM)
-- Keys are **never hardcoded** in source code or `BuildConfig`
-- WordPress password uses **Application Passwords** — never your main account password
-- Firebase rules should restrict Firestore read/write to authenticated users only
-- On-device Gemma 2B mode requires **no API keys at all** for the write step
-
-```json
-// Recommended Firestore rules
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
-  }
-}
-```
+MIT License — see [LICENSE](LICENSE) for details.
 
 ---
 
-## 🤝 Contributing
+## 👋 Credits
 
-1. Fork the repository
-2. Create your feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -m 'feat: add my feature'`
-4. Push to the branch: `git push origin feature/my-feature`
-5. Open a Pull Request
-
-Please follow [Conventional Commits](https://www.conventionalcommits.org/) for commit messages.
-
----
-
-## 📄 License
-
-```
-MIT License
-
-Copyright (c) 2024–2026 David / Nexuzy Lab
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
----
-
-## 👨‍💻 Maintainer
-
-| | |
-|---|---|
-| **Developer** | David |
-| **Organisation** | Nexuzy Lab |
-| **Support Email** | nexuzylab@gmail.com |
-| **Android Repo** | [nexuzy-publisher-android](https://github.com/david0154/nexuzy-publisher-android) |
-| **Desktop Repo** | [nexuzy-publisher-desk](https://github.com/david0154/nexuzy-publisher-desk) |
-
----
-
-<p align="center">
-  Made with ❤️ by <strong>Nexuzy Lab</strong> · Powered by Gemini AI, OpenAI, Sarvam AI & Gemma 2B On-Device
-</p>
+Built with ❤️ using Kotlin · Gemini AI · Google LiteRT (Gemma 2B) · Firebase · WordPress REST API
