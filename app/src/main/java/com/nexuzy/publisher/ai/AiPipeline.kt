@@ -14,9 +14,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * ╔══════════════════════════════════════════════════════════════════════════╗
+ * ╔════════════════════════════════════════════════════════════════════════╗
  * ║    NEXUZY AI WRITER — 8-STAGE PIPELINE (v11 • Sarvam-First)             ║
- * ╠══════════════════════════════════════════════════════════════════════════╣
+ * ╠════════════════════════════════════════════════════════════════════════╣
  * ║  STAGE 0 │ WEB CONTEXT   │ DuckDuckGo → live summary + source links     ║
  * ║  STAGE 1 │ WRITE         │ 🤖 Offline LiteRT model (100% on-device)     ║
  * ║  STAGE 2 │ FACT-CHECK    │ OpenAI → Gemini → Sarvam (any available)     ║
@@ -25,19 +25,16 @@ import kotlinx.coroutines.withContext
  * ║  STAGE 5 │ SEO           │ Sarvam → Gemini → OpenAI fallback            ║
  * ║  STAGE 6 │ TITLE + IMAGE │ Sarvam → Gemini → OpenAI (SEO image check)  ║
  * ║  STAGE 7 │ IMAGE         │ Watermark check + fallback search            ║
- * ╚══════════════════════════════════════════════════════════════════════════╝
+ * ╚════════════════════════════════════════════════════════════════════════╝
  *
  * DESIGN CONTRACT:
  *   Stage 0  = DuckDuckGo ONLY → fetches live web context + article source links
- *              (free, no API key, always runs)
  *   Stage 1  = Offline LiteRT model ONLY → writes the full article (zero API cost)
- *              The model uses DDG context + source links as its knowledge base.
  *   Stage 2  = OpenAI (primary fact-check) → Gemini → Sarvam (fallbacks)
  *   Stage 3  = Sarvam (humanize) → Gemini → OpenAI (fallbacks)
  *   Stage 4  = Sarvam (grammar/spelling) → OpenAI fallback
  *   Stage 5  = Sarvam (SEO meta) → Gemini → OpenAI fallbacks
- *              Also checks/suggests SEO-friendly image via Sarvam
- *   Stage 6  = Sarvam → Gemini → OpenAI (title rewrite, SEO image alt text)
+ *   Stage 6  = Sarvam → Gemini → OpenAI (title rewrite)
  *   Stage 7  = Download/verify article image
  *
  *   If ALL API keys are absent, stages 2–6 are skipped gracefully.
@@ -75,7 +72,7 @@ class AiPipeline(private val context: Context) {
         val factCheckFeedback: String = "",
         val grammarIssues: List<String> = emptyList(),
         val confidenceScore: Float = 0f,
-        val sourceLinks: List<String> = emptyList(),  // DDG article links used as context
+        val sourceLinks: List<String> = emptyList(),
         val error: String = "",
         val stepErrors: List<String> = emptyList()
     )
@@ -92,27 +89,27 @@ class AiPipeline(private val context: Context) {
 
     enum class Step {
         WEB_SEARCHING,
-        OFFLINE_WRITING,            // Stage 1 — offline model (primary, always)
-        MODEL_DOWNLOADING,          // Stage 1 — auto-download if needed
-        FACT_CHECKING,              // Stage 2 — OpenAI primary
-        FACT_CHECK_GEMINI_FALLBACK, // Stage 2 — Gemini fallback
-        FACT_CHECK_SARVAM_FALLBACK, // Stage 2 — Sarvam fallback
-        HUMANIZING,                 // Stage 3 — Sarvam primary
-        HUMANIZING_GEMINI_FALLBACK, // Stage 3 — Gemini fallback
-        HUMANIZING_OPENAI_FALLBACK, // Stage 3 — OpenAI fallback
-        HUMANIZING_SARVAM_FALLBACK, // kept for compat (unused in v11)
-        SARVAM_CHECKING,            // Stage 4 — grammar
-        GRAMMAR_OPENAI_FALLBACK,    // Stage 4 — OpenAI grammar fallback
-        SEO_GENERATING,             // Stage 5 — Sarvam primary
-        SEO_GEMINI_FALLBACK,        // Stage 5 — Gemini fallback
-        SEO_SARVAM_FALLBACK,        // kept for compat (unused in v11)
-        SEO_OPENAI_FALLBACK,        // Stage 5 — OpenAI fallback
-        TITLE_REWRITING,            // Stage 6 — Sarvam primary
-        TITLE_GEMINI_FALLBACK,      // Stage 6 — Gemini fallback
-        TITLE_SARVAM_FALLBACK,      // kept for compat (unused in v11)
-        TITLE_OPENAI_FALLBACK,      // Stage 6 — OpenAI fallback
-        IMAGE_DOWNLOADING,          // Stage 7
-        IMAGE_WATERMARK_SEARCH,     // Stage 7
+        OFFLINE_WRITING,
+        MODEL_DOWNLOADING,
+        FACT_CHECKING,
+        FACT_CHECK_GEMINI_FALLBACK,
+        FACT_CHECK_SARVAM_FALLBACK,
+        HUMANIZING,
+        HUMANIZING_GEMINI_FALLBACK,
+        HUMANIZING_OPENAI_FALLBACK,
+        HUMANIZING_SARVAM_FALLBACK,
+        SARVAM_CHECKING,
+        GRAMMAR_OPENAI_FALLBACK,
+        SEO_GENERATING,
+        SEO_GEMINI_FALLBACK,
+        SEO_SARVAM_FALLBACK,
+        SEO_OPENAI_FALLBACK,
+        TITLE_REWRITING,
+        TITLE_GEMINI_FALLBACK,
+        TITLE_SARVAM_FALLBACK,
+        TITLE_OPENAI_FALLBACK,
+        IMAGE_DOWNLOADING,
+        IMAGE_WATERMARK_SEARCH,
         COMPLETE, ERROR
     }
 
@@ -120,10 +117,6 @@ class AiPipeline(private val context: Context) {
     // MODE A: Quick multi-provider verify (bulk news list)
     // ──────────────────────────────────────────────────────────────────────
 
-    /**
-     * Quick credibility check for a single RSS item.
-     * Tries OpenAI → Gemini → Sarvam in order, uses first that succeeds.
-     */
     suspend fun verifyOnlyWithOpenAi(rssItem: RssItem): QuickVerifyResult =
         withContext(Dispatchers.IO) {
             val content = when {
@@ -132,7 +125,6 @@ class AiPipeline(private val context: Context) {
                 else -> rssItem.title
             }
 
-            // Try OpenAI first
             val openAiResult = openAi.factCheckArticle(title = rssItem.title, content = content)
             if (openAiResult.success) {
                 val score = when {
@@ -148,12 +140,8 @@ class AiPipeline(private val context: Context) {
                 )
             }
 
-            // Gemini fallback
             try {
-                val r = gemini.factCheckArticle(
-                    title   = rssItem.title,
-                    content = content
-                )
+                val r = gemini.factCheckArticle(title = rssItem.title, content = content)
                 if (r.success) {
                     val score = when {
                         r.confidenceScore > 0f -> r.confidenceScore
@@ -169,12 +157,8 @@ class AiPipeline(private val context: Context) {
                 }
             } catch (_: Exception) {}
 
-            // Sarvam fallback
             try {
-                val r = sarvam.factCheckArticle(
-                    title   = rssItem.title,
-                    content = content
-                )
+                val r = sarvam.factCheckArticle(title = rssItem.title, content = content)
                 if (r.success) {
                     val score = when {
                         r.confidenceScore > 0f -> r.confidenceScore
@@ -190,7 +174,6 @@ class AiPipeline(private val context: Context) {
                 }
             } catch (_: Exception) {}
 
-            // All failed — auto-score
             QuickVerifyResult(
                 rssItem         = rssItem,
                 credible        = true,
@@ -221,7 +204,6 @@ class AiPipeline(private val context: Context) {
 
         // ════════════════════════════════════════════════════════════════
         // STAGE 0 — DuckDuckGo: live web context + source article links
-        // Free, no API key. Gives the offline model current information.
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.WEB_SEARCHING,
             "🌐 Stage 0/7 — Fetching live context + source links via DuckDuckGo…"))
@@ -257,19 +239,23 @@ class AiPipeline(private val context: Context) {
 
         if (!offlineGemma.isModelReady()) {
             onProgress?.invoke(PipelineProgress(Step.MODEL_DOWNLOADING,
-                "📥 Downloading offline model… this happens only once (~1.5 GB)"))
-            val downloaded = offlineGemma.getDownloadManager().downloadModel { progress ->
-                val pct     = progress.percent
-                val mbDone  = progress.bytesDownloaded / 1_048_576
-                val mbTotal = progress.totalBytes / 1_048_576
-                onProgress?.invoke(PipelineProgress(Step.MODEL_DOWNLOADING,
-                    "📥 Offline model: $pct% ($mbDone MB / $mbTotal MB)"))
-            }
+                "📥 Downloading offline model… this happens only once (~500 MB)"))
+
+            // downloadModelSync accepts hfToken + onProgress callback
+            val downloaded = offlineGemma.getDownloadManager().downloadModelSync(
+                onProgress = { progress ->
+                    val pct     = progress.percent
+                    val mbDone  = progress.bytesDownloaded / 1_048_576
+                    val mbTotal = progress.totalBytes / 1_048_576
+                    onProgress?.invoke(PipelineProgress(Step.MODEL_DOWNLOADING,
+                        "📥 Offline model: $pct% ($mbDone MB / $mbTotal MB)"))
+                }
+            )
             if (!downloaded || !offlineGemma.isModelReady()) {
                 return@withContext PipelineResult(
                     success    = false,
                     title      = rssItem.title,
-                    error      = "Failed to download offline model. Check internet connection.",
+                    error      = "Failed to download offline model. Check internet connection and HuggingFace token.",
                     stepErrors = stepErrors
                 )
             }
@@ -358,14 +344,12 @@ class AiPipeline(private val context: Context) {
 
         // ════════════════════════════════════════════════════════════════
         // STAGE 3 — Humanize: Sarvam → Gemini → OpenAI
-        //   Makes the offline model's output sound like a human journalist.
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.HUMANIZING,
             "🧑 Stage 3/7 — Humanizing (Sarvam)…"))
 
         val humanizePrompt = buildHumanizePrompt()
 
-        // Primary: Sarvam
         if (!humanized) {
             try {
                 val r = sarvam.humanizeArticle(title = rssItem.title, content = currentContent)
@@ -382,7 +366,6 @@ class AiPipeline(private val context: Context) {
             }
         }
 
-        // Fallback 1: Gemini
         if (!humanized) {
             onProgress?.invoke(PipelineProgress(Step.HUMANIZING_GEMINI_FALLBACK,
                 "⚠️ Stage 3/7 — Humanizing via Gemini…"))
@@ -408,7 +391,6 @@ class AiPipeline(private val context: Context) {
             }
         }
 
-        // Fallback 2: OpenAI
         if (!humanized) {
             onProgress?.invoke(PipelineProgress(Step.HUMANIZING_OPENAI_FALLBACK,
                 "⚠️ Stage 3/7 — Humanizing via OpenAI…"))
@@ -428,7 +410,7 @@ class AiPipeline(private val context: Context) {
         }
 
         // ════════════════════════════════════════════════════════════════
-        // STAGE 4 — Grammar: Sarvam → OpenAI fallback  (unchanged)
+        // STAGE 4 — Grammar: Sarvam → OpenAI fallback
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.SARVAM_CHECKING,
             "✏️ Stage 4/7 — Grammar check (Sarvam)…"))
@@ -458,12 +440,10 @@ class AiPipeline(private val context: Context) {
 
         // ════════════════════════════════════════════════════════════════
         // STAGE 5 — SEO: Sarvam → Gemini → OpenAI
-        //   Generates meta, keywords, focus keyphrase, SEO image suggestion.
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.SEO_GENERATING,
             "🔎 Stage 5/7 — Generating SEO metadata (Sarvam)…"))
 
-        // Primary: Sarvam
         var seoResult = sarvam.generateSeoData(
             title          = rssItem.title,
             articleContent = currentContent,
@@ -475,7 +455,6 @@ class AiPipeline(private val context: Context) {
             stepErrors.add("[S5-Sarvam-SEO] ${seoResult.error} — trying Gemini…")
             onProgress?.invoke(PipelineProgress(Step.SEO_GEMINI_FALLBACK,
                 "⚠️ Stage 5/7 — SEO via Gemini…"))
-            // Fallback 1: Gemini
             try {
                 val gr = gemini.generateSeoData(
                     title          = rssItem.title,
@@ -489,7 +468,6 @@ class AiPipeline(private val context: Context) {
                     stepErrors.add("[S5-Gemini-SEO] ${gr.error} — trying OpenAI…")
                     onProgress?.invoke(PipelineProgress(Step.SEO_OPENAI_FALLBACK,
                         "⚠️ Stage 5/7 — SEO via OpenAI…"))
-                    // Fallback 2: OpenAI
                     val or3 = openAi.generateSeoData(
                         title          = rssItem.title,
                         articleContent = currentContent,
@@ -510,7 +488,7 @@ class AiPipeline(private val context: Context) {
         val seoImageAlt     = if (seoResult.success) seoResult.imageAltText else ""
 
         // ════════════════════════════════════════════════════════════════
-        // STAGE 6 — Title + SEO image alt: Sarvam → Gemini → OpenAI
+        // STAGE 6 — Title: Sarvam → Gemini → OpenAI
         // ════════════════════════════════════════════════════════════════
         onProgress?.invoke(PipelineProgress(Step.TITLE_REWRITING,
             "📝 Stage 6/7 — Rewriting headline (Sarvam)…"))
@@ -550,9 +528,6 @@ class AiPipeline(private val context: Context) {
         onProgress?.invoke(PipelineProgress(Step.COMPLETE,
             "✅ Nexuzy AI Writer complete! (🤖 offline model + 🌐 DDG context)"))
 
-        // ════════════════════════════════════════════════════════════════
-        // Build final Article
-        // ════════════════════════════════════════════════════════════════
         val article = Article(
             title             = finalTitle,
             content           = currentContent,
@@ -613,7 +588,7 @@ class AiPipeline(private val context: Context) {
     ): String {
         val linksBlock = if (sourceLinks.isNotEmpty()) {
             "\n\nSOURCE LINKS (cite these in the article where relevant):\n" +
-                    sourceLinks.joinToString("\n") { "• $it" }
+                    sourceLinks.joinToString("\n") { "\u2022 $it" }
         } else ""
 
         return if (liveContext.isNotBlank()) {
@@ -674,7 +649,6 @@ class AiPipeline(private val context: Context) {
     ): String {
         val titlePrompt = buildTitlePrompt(originalTitle, articleContent, focusKeyphrase, category)
 
-        // Provider 1: Sarvam
         try {
             val r = sarvam.generateSeoData(
                 title          = originalTitle,
@@ -691,7 +665,6 @@ class AiPipeline(private val context: Context) {
                 "[S6-Sarvam-Title-ex] ${e.message} — trying Gemini…")
         }
 
-        // Provider 2: Gemini
         try {
             val r = gemini.writeNewsArticle(
                 rssTitle       = originalTitle,
@@ -710,7 +683,6 @@ class AiPipeline(private val context: Context) {
                 "[S6-Gemini-Title-ex] ${e.message} — trying OpenAI…")
         }
 
-        // Provider 3: OpenAI
         try {
             val r = openAi.rewriteTitle(
                 originalTitle  = originalTitle,

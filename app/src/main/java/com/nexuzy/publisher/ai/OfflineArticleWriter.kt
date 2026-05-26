@@ -8,7 +8,7 @@ import kotlinx.coroutines.withContext
  * OfflineArticleWriter — powered by Devil AI 2B
  * ══════════════════════════════════════════════════════════════════════
  * Writes full, publish-ready news articles 100% on-device.
- * Uses Gemma 3n E2B LiteRT (.litertlm) via MediaPipe.
+ * Uses Gemma 3n E2B LiteRT (.litertlm) via Google LiteRT-LM runtime.
  *
  * No API key needed. No internet needed at write time
  * (model auto-downloads on first run via ModelDownloadManager).
@@ -98,8 +98,8 @@ Context         : $ctx
 RULES:
 - First line = article headline (no label prefix)
 - Blank line after headline
-- Lead paragraph: Who/What/When/Where/Why in ≤3 sentences
-- 3–4 body paragraphs: facts, background, impact
+- Lead paragraph: Who/What/When/Where/Why in \u22643 sentences
+- 3\u20134 body paragraphs: facts, background, impact
 - Short closing paragraph: what happens next
 - NO markdown, NO bullet points, NO sub-headers
 - NO AI filler: "notably", "in conclusion", "it is worth noting", "game-changer"
@@ -130,7 +130,6 @@ Write the complete article now. Output only the article.
         val lines = text.lines().filter { it.isNotBlank() }
         if (lines.isEmpty()) return ""
 
-        // Prepend title if model skipped it
         val hasHeadline = lines.first().length in 15..130
         return if (hasHeadline) text else "$originalTitle\n\n$text"
     }

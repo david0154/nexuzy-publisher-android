@@ -40,7 +40,7 @@ android {
         viewBinding true
     }
 
-    // Required for MediaPipe / LiteRT native libs
+    // Required for LiteRT native libs
     packagingOptions {
         pickFirst 'lib/x86/libc++_shared.so'
         pickFirst 'lib/x86_64/libc++_shared.so'
@@ -73,7 +73,7 @@ dependencies {
     implementation 'androidx.security:security-crypto:1.1.0-alpha06'
 
     // ----------------------------------------------------------------
-    // Navigation Component (navGraph, defaultNavHost, startDestination)
+    // Navigation Component
     // ----------------------------------------------------------------
     implementation 'androidx.navigation:navigation-fragment-ktx:2.7.7'
     implementation 'androidx.navigation:navigation-ui-ktx:2.7.7'
@@ -86,7 +86,7 @@ dependencies {
     ksp 'androidx.room:room-compiler:2.6.1'
 
     // ----------------------------------------------------------------
-    // Firebase (FirebaseAuth, FirebaseFirestore, Google Sign-In)
+    // Firebase
     // ----------------------------------------------------------------
     implementation platform('com.google.firebase:firebase-bom:33.1.2')
     implementation 'com.google.firebase:firebase-auth-ktx'
@@ -94,7 +94,7 @@ dependencies {
     implementation 'com.google.android.gms:play-services-auth:21.2.0'
 
     // ----------------------------------------------------------------
-    // Google Play Services Location (LocationServices, Priority)
+    // Google Play Services Location
     // ----------------------------------------------------------------
     implementation 'com.google.android.gms:play-services-location:21.3.0'
 
@@ -126,10 +126,11 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1'
 
     // ----------------------------------------------------------------
-    // Devil AI - On-device LLM inference
-    // Using MediaPipe Tasks GenAI (stable, on Maven Central)
+    // Devil AI 2B — On-device LLM inference (.litertlm model format)
+    // LiteRT-LM is the correct runtime for gemma-3n-E2B-it-int4.litertlm
+    // Repo: maven { url = uri("https://maven.google.com") }
     // ----------------------------------------------------------------
-    implementation 'com.google.mediapipe:tasks-genai:0.10.14'
+    implementation 'com.google.ai.edge.litert:litert-lm:1.0.0'
 
     // ----------------------------------------------------------------
     // Testing

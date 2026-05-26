@@ -2,23 +2,29 @@ package com.nexuzy.publisher.ai
 
 import android.content.Context
 import android.util.Log
+import com.google.ai.edge.litert.lm.LlmInference
+import com.google.ai.edge.litert.lm.LlmInference.LlmInferenceOptions
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.coroutines.resume
 
 /**
  * OfflineGemmaClient — "Devil AI 2B"
  * ══════════════════════════════════════════════════════════════════════
  * On-device LLM using Google Gemma 3n E2B (LiteRT int4).
  *
- * Model file : gemma-3n-E2B-it-int4.task  (or .litertlm)
+ * Model file : gemma-3n-E2B-it-int4.litertlm
  * Source     : huggingface.co/google/gemma-3n-E2B-it-litert-lm
- * Runtime    : MediaPipe Tasks GenAI (com.google.mediapipe:tasks-genai:0.10.14)
+ * Runtime    : Google LiteRT-LM  (com.google.ai.edge.litert:litert-lm:1.0.0)
  *
  * build.gradle (app):
  *   dependencies {
- *     implementation 'com.google.mediapipe:tasks-genai:0.10.14'
+ *     implementation 'com.google.ai.edge.litert:litert-lm:1.0.0'
  *   }
+ * settings.gradle (repositories):
+ *   maven { url = uri("https://maven.google.com") }
  *
  * HuggingFace token required (gated model). Save once via:
  *   getDownloadManager().saveHuggingFaceToken("hf_xxx")
@@ -28,17 +34,10 @@ class OfflineGemmaClient(private val context: Context) {
     companion object {
         private const val TAG = "DevilAI2B"
         const val MODEL_DISPLAY_NAME = "Devil AI 2B"
-        const val MODEL_DESCRIPTION  = "On-device AI writer • Gemma 3n E2B • No internet needed"
+        const val MODEL_DESCRIPTION  = "On-device AI writer \u2022 Gemma 3n E2B \u2022 No internet needed"
         private const val MAX_TOKENS  = 1024
         private const val TEMPERATURE = 0.7f
         private const val TOP_K       = 40
-        private const val TOP_P       = 0.95f
-
-        // MediaPipe Tasks GenAI class names (com.google.mediapipe:tasks-genai:0.10.14)
-        private const val LLM_INFERENCE_CLASS   = "com.google.mediapipe.tasks.genai.llminference.LlmInference"
-        private const val LLM_OPTIONS_CLASS     = "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions"
-        private const val LLM_OPTIONS_BUILDER   = "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceOptions\$Builder"
-        private const val RESULT_LISTENER_CLASS = "com.google.mediapipe.tasks.genai.llminference.LlmInference\$LlmInferenceResultListener"
     }
 
     private val downloadManager = ModelDownloadManager(context)
@@ -55,9 +54,8 @@ class OfflineGemmaClient(private val context: Context) {
     fun getDownloadManager(): ModelDownloadManager = downloadManager
 
     /**
-     * Run inference with Devil AI 2B on-device.
-     * Uses MediaPipe Tasks GenAI API via reflection so the app
-     * compiles cleanly even before the dependency resolves.
+     * Run inference with Devil AI 2B on-device using LiteRT-LM.
+     * Supports both streaming (onToken) and synchronous modes.
      */
     suspend fun generate(
         prompt: String,
@@ -72,17 +70,28 @@ class OfflineGemmaClient(private val context: Context) {
             )
         }
 
+        val modelPath = getModelFile().absolutePath
         Log.i(TAG, "Inference start | ${getModelFile().name} | maxTokens=$maxTokens")
 
         return@withContext try {
-            runMediaPipeInference(prompt, maxTokens, onToken)
-        } catch (e: ClassNotFoundException) {
-            Log.e(TAG, "MediaPipe Tasks GenAI not in classpath: ${e.message}")
-            GenerateResult(
-                success = false,
-                error   = "MediaPipe Tasks GenAI not found. Add to build.gradle:\n" +
-                          "implementation 'com.google.mediapipe:tasks-genai:0.10.14'"
-            )
+            val options = LlmInferenceOptions.builder()
+                .setModelPath(modelPath)
+                .setMaxTokens(maxTokens)
+                .setTemperature(TEMPERATURE)
+                .setTopK(TOP_K)
+                .build()
+
+            val llm = LlmInference.createFromOptions(context, options)
+
+            try {
+                if (onToken != null) {
+                    runStreaming(llm, prompt, onToken)
+                } else {
+                    runSync(llm, prompt)
+                }
+            } finally {
+                try { llm.close() } catch (_: Exception) {}
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Inference error: ${e.message}", e)
             GenerateResult(success = false, error = "Inference error: ${e.message}")
@@ -90,107 +99,54 @@ class OfflineGemmaClient(private val context: Context) {
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // MediaPipe Tasks GenAI inference (via reflection)
-    //
-    // Java API:
-    //   LlmInference.LlmInferenceOptions (Builder pattern)
-    //     .setModelPath(String)
-    //     .setMaxTokens(Int)
-    //     .build()
-    //
-    //   LlmInference.createFromOptions(context, options) : LlmInference
-    //     .generateResponse(prompt)                       : String
-    //     .generateResponseAsync(prompt, listener)
-    //     .close()
+    // Synchronous inference
     // ──────────────────────────────────────────────────────────────────
 
-    private fun runMediaPipeInference(
-        prompt: String,
-        maxTokens: Int,
-        onToken: ((String) -> Unit)?
-    ): GenerateResult {
-
-        // --- Resolve classes ---
-        val llmCls  = Class.forName(LLM_INFERENCE_CLASS)
-        val optsCls = Class.forName(LLM_OPTIONS_CLASS)
-        val bldrCls = Class.forName(LLM_OPTIONS_BUILDER)
-
-        // --- Build options via Builder ---
-        val bldr = bldrCls
-            .getConstructor()
-            .newInstance()
-        bldrCls.getMethod("setModelPath", String::class.java)
-            .invoke(bldr, getModelFile().absolutePath)
-        bldrCls.getMethod("setMaxTokens", Int::class.java)
-            .invoke(bldr, maxTokens)
-        // temperature, topK, topP — set if methods exist (graceful for older versions)
-        runCatching {
-            bldrCls.getMethod("setTemperature", Float::class.java).invoke(bldr, TEMPERATURE)
-        }
-        runCatching {
-            bldrCls.getMethod("setTopK", Int::class.java).invoke(bldr, TOP_K)
-        }
-        runCatching {
-            bldrCls.getMethod("setTopP", Float::class.java).invoke(bldr, TOP_P)
-        }
-        val opts = bldrCls.getMethod("build").invoke(bldr)
-
-        // --- Create inference engine ---
-        val llm = llmCls
-            .getMethod("createFromOptions", Context::class.java, optsCls)
-            .invoke(null, context, opts)
-
-        val sb = StringBuilder()
-        try {
-            if (onToken != null) {
-                // Streaming via LlmInferenceResultListener
-                try {
-                    val listenerCls = Class.forName(RESULT_LISTENER_CLASS)
-                    val proxy = java.lang.reflect.Proxy.newProxyInstance(
-                        listenerCls.classLoader,
-                        arrayOf(listenerCls)
-                    ) { _, method, args ->
-                        when (method.name) {
-                            "onPartialResult",
-                            "onResult" -> {
-                                val token = args?.getOrNull(0)?.toString() ?: ""
-                                if (token.isNotBlank()) {
-                                    sb.append(token)
-                                    onToken(token)
-                                }
-                            }
-                            "onError" -> Log.e(TAG, "Streaming error: ${args?.getOrNull(0)}")
-                        }
-                        null
-                    }
-                    llmCls.getMethod("generateResponseAsync", String::class.java, listenerCls)
-                        .invoke(llm, prompt, proxy)
-                } catch (_: ClassNotFoundException) {
-                    // Fallback: synchronous if listener class not found
-                    val out = llmCls.getMethod("generateResponse", String::class.java)
-                        .invoke(llm, prompt) as? String ?: ""
-                    sb.append(out)
-                    onToken(out)
-                }
-            } else {
-                // Synchronous call
-                val out = llmCls
-                    .getMethod("generateResponse", String::class.java)
-                    .invoke(llm, prompt) as? String ?: ""
-                sb.append(out)
-            }
-        } finally {
-            try { llmCls.getMethod("close").invoke(llm) } catch (_: Exception) {}
-        }
-
-        val output = sb.toString().trim()
-        return if (output.isNotBlank())
+    private fun runSync(llm: LlmInference, prompt: String): GenerateResult {
+        val output = llm.generateResponse(prompt)
+        return if (output.isNullOrBlank())
+            GenerateResult(success = false, error = "Model returned empty output")
+        else
             GenerateResult(
                 success         = true,
-                text            = output,
-                tokensGenerated = output.split(" ").size
+                text            = output.trim(),
+                tokensGenerated = output.trim().split(" ").size
             )
-        else
-            GenerateResult(success = false, error = "Model returned empty output")
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Streaming inference via LlmInference.LlmInferenceResultListener
+    // ──────────────────────────────────────────────────────────────────
+
+    private suspend fun runStreaming(
+        llm: LlmInference,
+        prompt: String,
+        onToken: (String) -> Unit
+    ): GenerateResult = suspendCancellableCoroutine { cont ->
+
+        val sb = StringBuilder()
+
+        llm.generateResponseAsync(prompt) { partialResult, done ->
+            val token = partialResult ?: ""
+            if (token.isNotBlank()) {
+                sb.append(token)
+                onToken(token)
+            }
+            if (done) {
+                val output = sb.toString().trim()
+                if (cont.isActive) {
+                    cont.resume(
+                        if (output.isNotBlank())
+                            GenerateResult(
+                                success         = true,
+                                text            = output,
+                                tokensGenerated = output.split(" ").size
+                            )
+                        else
+                            GenerateResult(success = false, error = "Model returned empty output")
+                    )
+                }
+            }
+        }
     }
 }
