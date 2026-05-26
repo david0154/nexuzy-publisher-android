@@ -1,6 +1,9 @@
 package com.nexuzy.publisher.network
 
+import android.content.Context
 import android.util.Log
+import com.nexuzy.publisher.ai.OfflineArticleWriter
+import com.nexuzy.publisher.ai.OfflineGemmaClient
 import com.nexuzy.publisher.data.prefs.ApiKeyManager
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -19,18 +22,16 @@ import java.util.concurrent.TimeUnit
  * Generates a full news article draft when the user types a write/generate
  * command in the David AI chat.
  *
- * PIPELINE:
- *   Step 1 — Try Gemini (all 4 models × all saved keys)
- *   Step 2 — If ALL Gemini keys exhausted → fall back to Sarvam AI (sarvam-m)
- *   Step 3 — Sarvam grammar + humanise correction (whoever wrote it)
- *   Step 4 — OpenAI Key 2 clean + humanise output
- *   Step 5 — Return clean ArticleDraft to caller
+ * PIPELINE (v3 — Sarvam removed, Devil AI 2B integrated):
+ *   Step 1 — Try Gemini (all 4 models x all saved keys)
+ *   Step 2 — If ALL Gemini keys exhausted → Offline Gemma 2B (Devil AI, 100% on-device)
+ *   Step 3 — If offline model not ready → OpenAI fallback
+ *   Step 4 — Gemini flash-lite grammar + humanise polish (replaces broken Sarvam)
+ *   Step 5 — OpenAI Key 2 final clean pass
+ *   Step 6 — Return clean ArticleDraft to caller
  *
- * HUMAN WRITING FIX (v2):
- *   - Gemini temperature 0.8 → 1.05, topP 0.97, frequencyPenalty 0.4, presencePenalty 0.3
- *   - buildGeminiPrompt rewritten as journalist persona (no bullet-rule OUTPUT RULES block)
- *   - Sarvam fallback: corrected writeArticle() call args (rssTitle + rssDescription both = topic)
- *   - Both Gemini and Sarvam paths go through full grammar+humanise → OpenAI clean pipeline
+ * Sarvam AI has been removed from this pipeline.
+ * SarvamApiClient / SarvamChatClient are kept for future use but not called here.
  */
 object ArticleGeneratorClient {
 
@@ -46,6 +47,9 @@ object ArticleGeneratorClient {
         "gemini-1.5-flash-8b"
     )
 
+    // Gemini model used for grammar + humanise polish (cheapest/fastest)
+    private const val POLISH_MODEL = "gemini-2.0-flash-lite"
+
     data class ArticleDraft(
         val success: Boolean,
         val title: String      = "",
@@ -57,9 +61,9 @@ object ArticleGeneratorClient {
         val writtenBy: String  = "",   // internal only — never shown to user
         val error: String      = ""
     ) {
-        /** Formatted chat reply shown to user — no AI branding or internal labels */
+        /** Formatted chat reply shown to user */
         fun toChatReply(): String {
-            if (!success) return "❌ Article generation failed: $error"
+            if (!success) return "\u274c Article generation failed: $error"
             return buildString {
                 appendLine("📝 **Article Draft Generated**")
                 appendLine()
@@ -69,10 +73,10 @@ object ArticleGeneratorClient {
                 appendLine("📋 **Summary:**")
                 appendLine(summary)
                 appendLine()
-                appendLine("🖼️ **Image Search Reference:**")
+                appendLine("🖼\ufe0f **Image Search Reference:**")
                 appendLine(imageQuery)
                 appendLine()
-                appendLine("🏷️ **Category:** $category")
+                appendLine("🏷\ufe0f **Category:** $category")
                 appendLine("🔗 **Tags:** $tags")
                 appendLine()
                 appendLine("————————————————————")
@@ -80,7 +84,7 @@ object ArticleGeneratorClient {
                 appendLine()
                 appendLine(content)
                 appendLine()
-                appendLine("✔️ *Ready to copy, edit, and publish on your WordPress site.*")
+                appendLine("✔\ufe0f *Ready to copy, edit, and publish on your WordPress site.*")
             }
         }
     }
@@ -92,13 +96,17 @@ object ArticleGeneratorClient {
     suspend fun generate(
         topic: String,
         weatherCtx: String = "",
-        keyManager: ApiKeyManager
+        keyManager: ApiKeyManager,
+        context: Context? = null
     ): ArticleDraft {
         if (topic.isBlank()) {
-            return ArticleDraft(success = false, error = "Please specify a topic. Example: \"generate article about solar energy\"")
+            return ArticleDraft(
+                success = false,
+                error   = "Please specify a topic. Example: \"generate article about solar energy\""
+            )
         }
 
-        // STEP 1: Try Gemini
+        // ── STEP 1: Try Gemini ────────────────────────────────────────────────
         val geminiKeys = keyManager.getGeminiKeys()
         var geminiRaw: String? = null
         if (geminiKeys.isNotEmpty()) {
@@ -110,83 +118,158 @@ object ArticleGeneratorClient {
             }
         }
 
-        // STEP 2: Sarvam fallback
-        val (rawContent, writtenBy) = if (geminiRaw != null) {
-            Pair(geminiRaw, "gemini")
-        } else {
-            Log.w("ArticleGenerator", "All Gemini keys exhausted — falling back to Sarvam AI")
-            val sarvamClient = SarvamApiClient(keyManager)
-            // Pass topic as both rssTitle and rssDescription so Sarvam has full context
-            val sarvamResult = sarvamClient.writeArticle(
-                rssTitle       = topic,
-                rssDescription = topic,
-                rssFullContent = "",
-                category       = "General",
-                maxWords       = 800
-            )
-            if (!sarvamResult.success || sarvamResult.content.isBlank()) {
-                return ArticleDraft(success = false, error = "Both Gemini and Sarvam AI are unavailable. " +
-                    "Please check your API keys in Settings.")
+        // ── STEP 2: Offline Gemma 2B (Devil AI) fallback ─────────────────────
+        if (geminiRaw == null && context != null) {
+            Log.w("ArticleGenerator", "All Gemini keys exhausted — trying Devil AI 2B offline")
+            val offlineResult = tryOfflineGemma(topic, context)
+            if (offlineResult != null) {
+                return polishAndReturn(offlineResult, topic, "devil-ai-2b", keyManager)
             }
-            return buildSarvamDraft(topic, sarvamResult.content, keyManager)
         }
 
-        // STEP 3: Parse Gemini JSON
-        val parsed = parseGeminiJson(rawContent)
+        // ── STEP 3: OpenAI fallback ───────────────────────────────────────────
+        if (geminiRaw == null) {
+            Log.w("ArticleGenerator", "Devil AI 2B not ready — trying OpenAI fallback")
+            val openAiClient = OpenAiApiClient(keyManager)
+            val openAiResult = openAiClient.generateArticle(topic)
+            if (openAiResult.success && openAiResult.cleanedContent.isNotBlank()) {
+                return buildPlainDraft(topic, openAiResult.cleanedContent, "openai")
+            }
+            return ArticleDraft(
+                success = false,
+                error   = "All AI providers unavailable (Gemini, Devil AI 2B, OpenAI). " +
+                          "Please check your API keys in Settings."
+            )
+        }
+
+        // ── STEP 4: Parse Gemini JSON ─────────────────────────────────────────
+        val parsed = parseGeminiJson(geminiRaw)
             ?: return ArticleDraft(success = false, error = "Failed to parse Gemini article JSON")
 
-        // STEP 4: Sarvam grammar + humanise
-        val sarvamClient  = SarvamApiClient(keyManager)
-        val grammarResult = sarvamClient.checkGrammarAndSpelling(parsed.content)
-        val grammarChecked = if (grammarResult.success) grammarResult.correctedText else parsed.content
-
-        // STEP 5: OpenAI Key 2 clean + humanise
-        val openAiClient = OpenAiApiClient(keyManager)
-        val cleanResult  = openAiClient.cleanArticleOutput(parsed.title, grammarChecked)
-        val finalContent = if (cleanResult.success && cleanResult.cleanedContent.isNotBlank())
-            cleanResult.cleanedContent else grammarChecked
-
-        return parsed.copy(content = finalContent, writtenBy = writtenBy)
+        return polishAndReturn(parsed, topic, "gemini", keyManager)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Sarvam draft builder
+    // Polish pass — Gemini grammar/humanise + OpenAI final clean
+    // (replaces the old Sarvam grammar check which was broken)
     // ─────────────────────────────────────────────────────────────────────────
 
-    private suspend fun buildSarvamDraft(
+    private suspend fun polishAndReturn(
+        draft: ArticleDraft,
         topic: String,
-        rawText: String,
+        writtenBy: String,
         keyManager: ApiKeyManager
     ): ArticleDraft {
-        val lines  = rawText.trim().lines().filter { it.isNotBlank() }
-        val title  = lines.firstOrNull() ?: topic
-        val body   = if (lines.size > 1) lines.drop(1).joinToString("\n\n") else rawText
+        val geminiKeys = keyManager.getGeminiKeys()
 
-        // Grammar + humanise
-        val sarvamClient  = SarvamApiClient(keyManager)
-        val grammarResult = sarvamClient.checkGrammarAndSpelling(body)
-        val grammarChecked = if (grammarResult.success) grammarResult.correctedText else body
+        // Grammar + humanise via Gemini flash-lite (replaces Sarvam)
+        var polished = draft.content
+        if (geminiKeys.isNotEmpty()) {
+            val grammarResult = geminiPolish(draft.content, geminiKeys.first())
+            if (!grammarResult.isNullOrBlank()) polished = grammarResult
+        }
 
-        // OpenAI clean + humanise
+        // OpenAI final clean pass
         val openAiClient = OpenAiApiClient(keyManager)
-        val cleanResult  = openAiClient.cleanArticleOutput(title, grammarChecked)
+        val cleanResult  = openAiClient.cleanArticleOutput(draft.title, polished)
         val finalContent = if (cleanResult.success && cleanResult.cleanedContent.isNotBlank())
-            cleanResult.cleanedContent else grammarChecked
+            cleanResult.cleanedContent else polished
 
-        return ArticleDraft(
-            success    = true,
-            title      = title,
-            summary    = finalContent.take(200).trimEnd() + "…",
-            content    = finalContent,
-            imageQuery = "$topic news photo",
-            category   = "General",
-            tags       = topic.split(" ").take(5).joinToString(", "),
-            writtenBy  = "sarvam"
-        )
+        return draft.copy(content = finalContent, writtenBy = writtenBy)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Gemini API call
+    // Offline Gemma 2B (Devil AI) — on-device article generation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private suspend fun tryOfflineGemma(
+        topic: String,
+        context: Context
+    ): ArticleDraft? {
+        return try {
+            val gemmaClient = OfflineGemmaClient(context)
+            if (!gemmaClient.isModelReady()) {
+                Log.w("ArticleGenerator", "Devil AI 2B model not downloaded yet")
+                return null
+            }
+            val writer = OfflineArticleWriter(gemmaClient)
+            val result = writer.write(
+                title       = topic,
+                description = topic,
+                category    = "General",
+                targetWords = 800
+            )
+            if (!result.success || result.content.isBlank()) return null
+
+            val lines   = result.content.trim().lines().filter { it.isNotBlank() }
+            val headline = lines.firstOrNull() ?: topic
+            val body     = if (lines.size > 1) lines.drop(1).joinToString("\n\n") else result.content
+
+            ArticleDraft(
+                success    = true,
+                title      = headline,
+                summary    = body.take(220).trimEnd() + "…",
+                content    = result.content,
+                imageQuery = "$topic news photo",
+                category   = "General",
+                tags       = topic.split(" ").take(6).joinToString(", "),
+                writtenBy  = "devil-ai-2b"
+            )
+        } catch (e: Exception) {
+            Log.e("ArticleGenerator", "Devil AI 2B error: ${e.message}")
+            null
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Gemini grammar + humanise polish
+    // (lightweight call to flash-lite — replaces Sarvam checkGrammarAndSpelling)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun geminiPolish(articleText: String, apiKey: String): String? {
+        return try {
+            val prompt = """
+You are a professional copy editor. Fix any grammar, spelling, punctuation, and awkward phrasing in the article below. 
+Make it sound natural and human. Keep the same structure, length, and facts. 
+Return ONLY the corrected article text. No explanation.
+
+ARTICLE:
+$articleText
+            """.trimIndent()
+
+            val bodyJson = JSONObject().apply {
+                put("contents", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("role", "user")
+                        put("parts", JSONArray().apply {
+                            put(JSONObject().put("text", prompt))
+                        })
+                    })
+                })
+                put("generationConfig", JSONObject().apply {
+                    put("temperature",     0.3)
+                    put("maxOutputTokens", 2048)
+                })
+            }
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/$POLISH_MODEL:generateContent?key=$apiKey"
+            val response = http.newCall(
+                Request.Builder().url(url)
+                    .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+                    .addHeader("User-Agent", "NexuzyPublisher/2.0")
+                    .build()
+            ).execute()
+            if (!response.isSuccessful) return null
+            val raw = response.body?.string() ?: return null
+            JSONObject(raw)
+                .getJSONArray("candidates").getJSONObject(0)
+                .getJSONObject("content")
+                .getJSONArray("parts").getJSONObject(0)
+                .getString("text").trim().ifBlank { null }
+        } catch (e: Exception) { null }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Gemini article generation
     // ─────────────────────────────────────────────────────────────────────────
 
     private fun tryGemini(
@@ -262,7 +345,9 @@ Return your response as a JSON object ONLY (no text before or after the JSON):
 
     private fun parseGeminiJson(raw: String): ArticleDraft? {
         return try {
-            val cleaned = raw.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            val cleaned = raw
+                .removePrefix("```json").removePrefix("```")
+                .removeSuffix("```").trim()
             val parsed  = JSONObject(cleaned)
             ArticleDraft(
                 success    = true,
@@ -274,6 +359,29 @@ Return your response as a JSON object ONLY (no text before or after the JSON):
                 tags       = parsed.optString("tags", "")
             )
         } catch (e: Exception) { null }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Plain draft builder (for OpenAI fallback path)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private fun buildPlainDraft(
+        topic: String,
+        content: String,
+        writtenBy: String
+    ): ArticleDraft {
+        val lines    = content.trim().lines().filter { it.isNotBlank() }
+        val headline = lines.firstOrNull() ?: topic
+        return ArticleDraft(
+            success    = true,
+            title      = headline,
+            summary    = content.take(220).trimEnd() + "…",
+            content    = content,
+            imageQuery = "$topic news photo",
+            category   = "General",
+            tags       = topic.split(" ").take(6).joinToString(", "),
+            writtenBy  = writtenBy
+        )
     }
 
     // ─────────────────────────────────────────────────────────────────────────
